@@ -104,6 +104,7 @@ function render() {
   var tabRenderers = {
     gratitude: renderGratitudeTab,
     sobriety: renderSobrietyTab,
+    craving: renderCravingTab,
     journal: renderJournalTab,
     resources: renderResourcesTab,
     settings: renderSettingsTab
@@ -172,6 +173,7 @@ function quoteCard(t) {
 var TABS = [
   { key: "gratitude", label: "Morning", icon: "\u2600\uFE0F" },
   { key: "sobriety", label: "Sobriety", icon: "\uD83D\uDD25" },
+  { key: "craving", label: "Urge", icon: "\uD83C\uDF0A" },
   { key: "journal", label: "Evening", icon: "\uD83C\uDF19" },
   { key: "resources", label: "Resources", icon: "\uD83D\uDCCD" },
   { key: "settings", label: "Settings", icon: "\u2699\uFE0F" }
@@ -246,17 +248,21 @@ function bottomBar(t) {
 }
 
 function bottomNav(t) {
+  // flex:1 + minWidth:0 + ellipsis on the label (rather than space-around
+  // with fixed padding) keeps all tabs reachable at once as more are added —
+  // items shrink together instead of the last one getting pushed off-screen
+  // on narrow phones.
   var nav = el("div", {
-    style: { background: t.bgSoft, borderTop: "1px solid " + t.border, display: "flex", justifyContent: "space-around", padding: "8px 4px calc(8px + env(safe-area-inset-bottom, 0px))" }
+    style: { background: t.bgSoft, borderTop: "1px solid " + t.border, display: "flex", padding: "8px 2px calc(8px + env(safe-area-inset-bottom, 0px))" }
   });
   TABS.forEach(function(tb) {
     var active = state.tab === tb.key;
     var btn = el("button", {
       onclick: function() { state.tab = tb.key; render(); },
-      style: { background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "6px 10px", cursor: "pointer", color: active ? t.primary : t.textMuted }
+      style: { flex: "1 1 0", minWidth: "0", background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "6px 2px", cursor: "pointer", color: active ? t.primary : t.textMuted }
     }, [
-      el("span", { style: { fontSize: "18px" } }, [tb.icon]),
-      el("span", { style: { fontSize: "10px", fontWeight: "700" } }, [tb.label])
+      el("span", { style: { fontSize: "17px" } }, [tb.icon]),
+      el("span", { style: { fontSize: "9px", fontWeight: "700", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, [tb.label])
     ]);
     nav.appendChild(btn);
   });
@@ -323,6 +329,7 @@ function renderGratitudeTab(t) {
     primaryButton(t, "Save today's gratitude", function() {
       var next = inputs.map(function(i) { return i.value; });
       writeLS(key, next);
+      if (next.some(function(v) { return v.trim(); })) recordStatDate("stats:gratitudeDates", dateKey(today));
       flashSpan.style.display = "inline";
       setTimeout(function() { flashSpan.style.display = "none"; }, 1800);
     }),
@@ -367,15 +374,105 @@ function durationSince(dateStr) {
   if (months < 0) { years -= 1; months += 12; }
   return { years: years, months: months, days: days, totalDays: totalDays };
 }
+// Days between two dateKey() strings — used to size an archived streak at
+// the moment it's reset, independent of "now" (unlike durationSince, which
+// always measures up to the present and so can't describe a closed streak).
+function daysBetween(fromStr, toStr) {
+  var a = new Date(fromStr + "T00:00:00");
+  var b = new Date(toStr + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
 var MILESTONES = [
-  { label: "1 Day", days: 1 },
-  { label: "7 Days", days: 7 },
-  { label: "30 Days", days: 30 },
-  { label: "60 Days", days: 60 },
-  { label: "90 Days", days: 90 },
-  { label: "180 Days", days: 180 },
-  { label: "1 Year", days: 365 }
+  { label: "1 Day", value: 1 },
+  { label: "7 Days", value: 7 },
+  { label: "30 Days", value: 30 },
+  { label: "60 Days", value: 60 },
+  { label: "90 Days", value: 90 },
+  { label: "180 Days", value: 180 },
+  { label: "1 Year", value: 365 }
 ];
+// Shared by the per-substance day badges above and the cross-feature
+// achievements below — both are "earn a badge at each threshold, show how
+// far to the next one" with the same visuals, just different units.
+function milestoneBadgeRow(t, milestones, currentValue) {
+  var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+  var nextMilestone = null;
+  milestones.forEach(function(m) {
+    var earned = currentValue >= m.value;
+    if (!earned && nextMilestone === null) nextMilestone = m;
+    row.appendChild(el("div", {
+      style: {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: earned ? t.primary : t.bgSoft,
+        border: "1px solid " + (earned ? t.primary : t.border),
+        color: earned ? t.primaryText : t.textMuted,
+        borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "800",
+        opacity: earned ? "1" : "0.65"
+      }
+    }, [earned ? "🏆 " + m.label : m.label]));
+  });
+  return { row: row, next: nextMilestone };
+}
+
+/* ===========================================================
+   ACHIEVEMENTS — recovery milestones beyond streak days.
+   Gratitude entries get pruned after 30 days (see the duplicate-check
+   logic in the gratitude tab) and craving/trigger logs could in
+   principle be cleared, so a lifetime count can't be derived from
+   what's currently in localStorage. recordStatDate keeps a small,
+   never-pruned list of dates-ever-saved just for this tally.
+=========================================================== */
+function recordStatDate(statKey, dateStr) {
+  var dates = readLS(statKey, []);
+  if (dates.indexOf(dateStr) === -1) {
+    dates.push(dateStr);
+    writeLS(statKey, dates);
+  }
+}
+var ACHIEVEMENTS = [
+  { label: "Grateful Days", icon: "☀️", unit: "days", tiers: [7, 30, 100],
+    count: function() { return readLS("stats:gratitudeDates", []).length; } },
+  { label: "Journal Entries", icon: "🌙", unit: "entries", tiers: [7, 30, 100],
+    count: function() { return readLS("stats:journalDates", []).length; } },
+  { label: "Urges Ridden Out", icon: "🌊", unit: "sessions", tiers: [5, 20, 50],
+    count: function() { return readLS(CRAVING_LOG_KEY, []).length; } },
+  { label: "Urges Passed", icon: "💪", unit: "wins", tiers: [5, 20, 50],
+    count: function() { return readLS(CRAVING_LOG_KEY, []).filter(function(e) { return e.outcome === "passed"; }).length; } },
+  { label: "Self-Awareness Logs", icon: "🚩", unit: "logs", tiers: [5, 20, 50],
+    count: function() { return readLS(TRIGGER_LOG_KEY, []).length; } }
+];
+function renderAchievements(t) {
+  var wrap = el("div", { style: { marginTop: "24px" } });
+  wrap.appendChild(sectionLabel(t, "Milestones beyond the streak"));
+  wrap.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "14px" } },
+    ["Recovery shows up in more than days sober — these track the habits that support it."]));
+
+  ACHIEVEMENTS.forEach(function(a) {
+    var count = a.count();
+    var tierMilestones = a.tiers.map(function(v) { return { label: v + " " + a.unit, value: v }; });
+    var result = milestoneBadgeRow(t, tierMilestones, count);
+    var body = [
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } }, [
+        el("span", { style: { fontSize: "20px" } }, [a.icon]),
+        el("div", {}, [
+          el("div", { style: { fontFamily: t.display, fontWeight: "900", fontSize: "20px", color: t.text } }, [String(count)]),
+          el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, [a.label])
+        ])
+      ]),
+      result.row
+    ];
+    if (result.next) {
+      var toGo = result.next.value - count;
+      body.push(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
+        [toGo + " more to reach " + result.next.value + "."]));
+    } else {
+      body.push(el("div", { style: { fontSize: "12px", color: t.secondary, fontWeight: "700", marginTop: "8px" } }, ["All tiers earned here — nice work."]));
+    }
+    wrap.appendChild(card(t, body, { marginBottom: "12px" }));
+  });
+
+  return wrap;
+}
 function renderSobrietyTab(t) {
   var data = readLS("sobriety:tracker", [
     { name: "Substance 1", since: "" }, { name: "Substance 2", since: "" }, { name: "Substance 3", since: "" },
@@ -408,6 +505,18 @@ function renderSobrietyTab(t) {
 
     var statsHolder = el("div");
     var badgesHolder = el("div");
+    var resetHolder = el("div");
+    var historyHolder = el("div");
+    var resetPanelOpen = { v: false };
+
+    function longestStreakDays() {
+      var history = data[i].history || [];
+      var best = history.reduce(function(max, h) { return Math.max(max, h.days || 0); }, 0);
+      var dur = durationSince(dateInput.value);
+      if (dur && !dur.invalid) best = Math.max(best, dur.totalDays);
+      return best;
+    }
+
     function renderStats() {
       statsHolder.innerHTML = "";
       badgesHolder.innerHTML = "";
@@ -426,29 +535,20 @@ function renderSobrietyTab(t) {
         ]));
         statsHolder.appendChild(row);
 
+        if ((data[i].history || []).length > 0) {
+          var longest = longestStreakDays();
+          statsHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
+            ["\ud83c\udfc6 Longest streak so far: " + longest + " day" + (longest === 1 ? "" : "s") + "."]));
+        }
+
         var badgeLabel = el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: "16px", marginBottom: "8px" } }, ["Milestone Awards"]);
         badgesHolder.appendChild(badgeLabel);
-        var badgeRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
-        var nextMilestone = null;
-        MILESTONES.forEach(function(m) {
-          var earned = dur.totalDays >= m.days;
-          if (!earned && nextMilestone === null) nextMilestone = m;
-          badgeRow.appendChild(el("div", {
-            style: {
-              display: "flex", alignItems: "center", gap: "6px",
-              background: earned ? t.primary : t.bgSoft,
-              border: "1px solid " + (earned ? t.primary : t.border),
-              color: earned ? t.primaryText : t.textMuted,
-              borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "800",
-              opacity: earned ? "1" : "0.65"
-            }
-          }, [earned ? "\uD83C\uDFC6 " + m.label : m.label]));
-        });
-        badgesHolder.appendChild(badgeRow);
-        if (nextMilestone) {
-          var daysToGo = nextMilestone.days - dur.totalDays;
+        var milestoneResult = milestoneBadgeRow(t, MILESTONES, dur.totalDays);
+        badgesHolder.appendChild(milestoneResult.row);
+        if (milestoneResult.next) {
+          var daysToGo = milestoneResult.next.value - dur.totalDays;
           badgesHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
-            [daysToGo + " day" + (daysToGo === 1 ? "" : "s") + " to go until " + nextMilestone.label + "."]));
+            [daysToGo + " day" + (daysToGo === 1 ? "" : "s") + " to go until " + milestoneResult.next.label + "."]));
         } else {
           badgesHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.secondary, fontWeight: "700", marginTop: "8px" } }, ["All milestones earned \u2014 incredible work."]));
         }
@@ -456,21 +556,516 @@ function renderSobrietyTab(t) {
         statsHolder.appendChild(el("div", { style: { marginTop: "10px", color: t.accent, fontSize: "12px", fontWeight: "700" } }, ["That date is in the future \u2014 double check it."]));
       }
     }
+
+    function renderResetPanel() {
+      resetHolder.innerHTML = "";
+      if (!dateInput.value) return;
+
+      if (!resetPanelOpen.v) {
+        resetHolder.appendChild(el("button", {
+          type: "button",
+          onclick: function() { resetPanelOpen.v = true; renderResetPanel(); },
+          style: { background: "none", border: "none", color: t.textMuted, fontSize: "12px", fontWeight: "700", textDecoration: "underline", cursor: "pointer", padding: "4px 0", marginTop: "16px" }
+        }, ["Had a setback? Log a reset"]));
+        return;
+      }
+
+      var resetDateInput = el("input", {
+        type: "date", max: dateKey(new Date()), min: dateInput.value,
+        style: { width: "100%", marginTop: "4px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", boxSizing: "border-box" }
+      });
+      resetDateInput.value = dateKey(new Date());
+      var resetNoteInput = el("textarea", {
+        rows: "2", placeholder: "What happened, or what would help next time? (optional, just for you)",
+        style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+      });
+      var warnDiv = el("div", { style: { color: t.accent, fontSize: "12px", marginTop: "8px", display: "none" } },
+        ["The reset date can't be before your current streak started."]);
+
+      resetHolder.appendChild(card(t, [
+        el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "14px", color: t.text, marginBottom: "4px" } }, ["Log a reset"]),
+        el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } },
+          ["Setbacks are part of recovery for a lot of people \u2014 this isn't erased. Your current streak is saved to your history below, and a new count starts from the date you pick."]),
+        el("label", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700" } }, ["Reset date"]),
+        resetDateInput,
+        resetNoteInput,
+        warnDiv,
+        el("div", { style: { display: "flex", gap: "10px", marginTop: "12px" } }, [
+          el("button", {
+            type: "button",
+            onclick: function() { resetPanelOpen.v = false; renderResetPanel(); },
+            style: { flex: "1", padding: "12px", borderRadius: "12px", border: "1px solid " + t.border, background: "none", color: t.text, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+          }, ["Cancel"]),
+          el("button", {
+            type: "button",
+            onclick: function() {
+              var resetDate = resetDateInput.value;
+              if (!resetDate || resetDate < dateInput.value) {
+                warnDiv.style.display = "block";
+                return;
+              }
+              var history = data[i].history || [];
+              history.push({
+                since: dateInput.value,
+                until: resetDate,
+                days: daysBetween(dateInput.value, resetDate),
+                note: resetNoteInput.value.trim()
+              });
+              data[i].history = history;
+              data[i].since = resetDate;
+              writeLS("sobriety:tracker", data);
+              dateInput.value = resetDate;
+              resetPanelOpen.v = false;
+              renderStats();
+              renderResetPanel();
+              renderHistory();
+            },
+            style: { flex: "1", padding: "12px", borderRadius: "12px", border: "none", background: t.primary, color: t.primaryText, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+          }, ["Confirm reset"])
+        ])
+      ], { marginTop: "16px", background: t.cardAlt }));
+    }
+
+    function renderHistory() {
+      historyHolder.innerHTML = "";
+      var history = (data[i].history || []).slice().reverse();
+      if (history.length === 0) return;
+      historyHolder.appendChild(el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: "18px", marginBottom: "8px" } }, ["Past streaks"]));
+      history.forEach(function(h) {
+        historyHolder.appendChild(el("div", { style: { background: t.bgSoft, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px 12px", marginBottom: "8px" } }, [
+          el("div", { style: { fontSize: "13px", color: t.text, fontWeight: "700" } }, [h.since + " \u2192 " + h.until + " \u00b7 " + h.days + " day" + (h.days === 1 ? "" : "s")]),
+          h.note ? el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "4px" } }, [h.note]) : null
+        ]));
+      });
+    }
+
     dateInput.addEventListener("change", function() {
       data[i].since = dateInput.value;
       writeLS("sobriety:tracker", data);
       renderStats();
+      renderResetPanel();
     });
     renderStats();
+    renderResetPanel();
+    renderHistory();
 
     wrap.appendChild(card(t, [
       nameInput,
       el("label", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700" } }, ["Clean since (month / day / year)"]),
       dateInput,
       statsHolder,
-      badgesHolder
+      badgesHolder,
+      resetHolder,
+      historyHolder
     ], { marginBottom: "14px" }));
   });
+
+  wrap.appendChild(renderAchievements(t));
+
+  return wrap;
+}
+
+/* ===========================================================
+   URGE / CRAVING TAB
+   Urges peak and pass like a wave, usually within 10-20 minutes.
+   This is a guided "urge surfing" timer: a quick HALT + intensity
+   check-in, a paced-breathing countdown, then a check-in on the
+   way out that gets logged so patterns become visible over time.
+=========================================================== */
+var CRAVING_LOG_KEY = "craving:log";
+var HALT_OPTIONS = [
+  { key: "hungry", label: "Hungry", icon: "🍽️" },
+  { key: "angry", label: "Angry / Anxious", icon: "😤" },
+  { key: "lonely", label: "Lonely", icon: "🙋" },
+  { key: "tired", label: "Tired", icon: "😴" }
+];
+var CRAVING_DURATIONS = [5, 10, 15, 20];
+
+// Ephemeral (not persisted) — an in-progress session shouldn't survive a
+// browser restart, but should survive switching tabs and coming back, so
+// remaining time is computed from a stored end timestamp rather than a
+// counter that would desync while the tab isn't mounted.
+var cravingSession = null;
+
+function newCravingSession() {
+  return { phase: "setup", halt: {}, intensityBefore: 5, durationMin: 10 };
+}
+function formatCountdown(ms) {
+  var totalSec = Math.max(0, Math.ceil(ms / 1000));
+  var m = Math.floor(totalSec / 60);
+  var s = totalSec % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+// One persistent ticker (mirrors the ad-container pattern above) instead of
+// creating/tearing down an interval on every tab switch. It only triggers a
+// re-render while the craving tab is actually mounted and a timer is running.
+setInterval(function() {
+  if (!cravingSession || cravingSession.phase !== "active") return;
+  if (Date.now() >= cravingSession.endsAt) cravingSession.phase = "checkin";
+  if (state.tab === "craving") render();
+}, 1000);
+
+function haltChipRow(t, selected, onToggle) {
+  var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+  HALT_OPTIONS.forEach(function(opt) {
+    var active = !!selected[opt.key];
+    row.appendChild(el("button", {
+      type: "button",
+      onclick: function() { onToggle(opt.key); },
+      style: {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text,
+        border: "1px solid " + (active ? t.primary : t.border), borderRadius: "999px",
+        padding: "8px 14px", fontSize: "13px", fontWeight: "700", cursor: "pointer"
+      }
+    }, [opt.icon + " " + opt.label]));
+  });
+  return row;
+}
+function intensitySlider(t, value, onChange) {
+  var display = el("div", { style: { fontFamily: t.display, fontSize: "28px", fontWeight: "900", color: t.primary, textAlign: "center", marginBottom: "6px" } }, [String(value)]);
+  var input = el("input", {
+    type: "range", min: "1", max: "10", step: "1",
+    style: { width: "100%" }
+  });
+  input.value = String(value);
+  input.addEventListener("input", function() {
+    display.textContent = input.value;
+    onChange(parseInt(input.value, 10));
+  });
+  var labels = el("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "11px", color: t.textMuted, fontWeight: "700", marginTop: "2px" } }, [
+    el("span", {}, ["Barely there"]), el("span", {}, ["Overwhelming"])
+  ]);
+  return el("div", {}, [display, input, labels]);
+}
+
+function renderCravingSetup(t) {
+  if (!cravingSession) cravingSession = newCravingSession();
+  var s = cravingSession;
+
+  var haltHolder = el("div");
+  function refreshHalt() {
+    haltHolder.innerHTML = "";
+    haltHolder.appendChild(haltChipRow(t, s.halt, function(key) {
+      s.halt[key] = !s.halt[key];
+      refreshHalt();
+    }));
+  }
+  refreshHalt();
+
+  var durationRow = el("div", { style: { display: "flex", gap: "8px" } });
+  function refreshDuration() {
+    durationRow.innerHTML = "";
+    CRAVING_DURATIONS.forEach(function(mins) {
+      var active = s.durationMin === mins;
+      durationRow.appendChild(el("button", {
+        type: "button",
+        onclick: function() { s.durationMin = mins; refreshDuration(); },
+        style: {
+          flex: "1", padding: "10px", borderRadius: "10px", cursor: "pointer", fontWeight: "800", fontSize: "13px",
+          background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text, border: "1px solid " + (active ? t.primary : t.border)
+        }
+      }, [mins + " min"]));
+    });
+  }
+  refreshDuration();
+
+  return el("div", {}, [
+    card(t, [
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" } }, [
+        el("span", { style: { fontSize: "28px" } }, ["🌊"]),
+        el("div", {}, [
+          el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text } }, ["Having an urge?"]),
+          el("div", { style: { fontSize: "12px", color: t.textMuted } }, ["Urges peak and fall like a wave — most pass within 10–20 minutes. You don't have to act on it."])
+        ])
+      ]),
+      sectionLabel(t, "What's going on right now? (optional)"),
+      haltHolder,
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "How strong is it, 1–10?")]),
+      intensitySlider(t, s.intensityBefore, function(v) { s.intensityBefore = v; }),
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "Ride it out for")]),
+      durationRow
+    ]),
+    el("div", { style: { marginTop: "16px" } }, [
+      primaryButton(t, "Start riding the wave", function() {
+        var now = Date.now();
+        s.startedAt = now;
+        s.endsAt = now + s.durationMin * 60 * 1000;
+        s.phase = "active";
+        render();
+      })
+    ])
+  ]);
+}
+
+function renderCravingActive(t) {
+  var s = cravingSession;
+  var remaining = s.endsAt - Date.now();
+  var pct = Math.min(1, Math.max(0, 1 - remaining / (s.durationMin * 60 * 1000)));
+
+  var breathCircle = el("div", {
+    style: {
+      width: "150px", height: "150px", borderRadius: "50%", margin: "10px auto",
+      background: "radial-gradient(circle at 40% 35%, " + t.primary + ", " + t.secondary + ")",
+      animation: "anchorpoint-breathe 8s ease-in-out infinite",
+      boxShadow: "0 0 40px " + t.primary + "55"
+    }
+  });
+
+  var selectedHalt = Object.keys(s.halt || {}).filter(function(k) { return s.halt[k]; });
+  var haltLine = selectedHalt.length
+    ? el("div", { style: { fontSize: "12px", color: t.textMuted, textAlign: "center", marginTop: "4px" } },
+        ["Noted: " + selectedHalt.map(function(k) { var o = HALT_OPTIONS.find(function(x) { return x.key === k; }); return o ? o.label : k; }).join(", ")])
+    : null;
+
+  var body = [
+    el("div", { style: { fontSize: "13px", color: t.textMuted, textAlign: "center", fontWeight: "700" } }, ["Breathe in slowly as it grows… out slowly as it shrinks."]),
+    breathCircle,
+    el("div", { style: { fontFamily: t.display, fontSize: "40px", fontWeight: "900", color: t.text, textAlign: "center" } }, [formatCountdown(remaining)]),
+    el("div", { style: { fontSize: "12px", color: t.textMuted, textAlign: "center", marginBottom: "4px" } }, ["remaining · " + Math.round(pct * 100) + "% through"])
+  ];
+  if (haltLine) body.push(haltLine);
+
+  var actions = el("div", { style: { display: "flex", gap: "10px", marginTop: "16px" } }, [
+    el("button", {
+      onclick: function() { s.endsAt += 5 * 60 * 1000; s.durationMin += 5; render(); },
+      style: { flex: "1", padding: "12px", borderRadius: "12px", border: "1px solid " + t.border, background: t.bgSoft, color: t.text, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+    }, ["+5 more minutes"]),
+    primaryButton(t, "I'm through it", function() { s.phase = "checkin"; render(); })
+  ]);
+
+  return el("div", {}, [card(t, body), actions]);
+}
+
+function renderCravingCheckin(t) {
+  var s = cravingSession;
+  var afterVal = { v: 5 };
+  var outcomeHolder = el("div");
+  var chosenOutcome = { v: null };
+  var noteInput = el("textarea", {
+    rows: "3", placeholder: "Anything worth remembering for next time? (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+  });
+
+  function refreshOutcomes() {
+    outcomeHolder.innerHTML = "";
+    var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+    [
+      { key: "passed", label: "🌊 It passed", color: t.secondary },
+      { key: "gave_in", label: "I gave in", color: t.accent }
+    ].forEach(function(opt) {
+      var active = chosenOutcome.v === opt.key;
+      row.appendChild(el("button", {
+        type: "button",
+        onclick: function() { chosenOutcome.v = opt.key; refreshOutcomes(); },
+        style: {
+          flex: "1 1 120px", padding: "10px", borderRadius: "10px", cursor: "pointer", fontWeight: "800", fontSize: "13px",
+          background: active ? opt.color : t.bgSoft, color: active ? t.primaryText : t.text, border: "1px solid " + (active ? opt.color : t.border)
+        }
+      }, [opt.label]));
+    });
+    outcomeHolder.appendChild(row);
+  }
+  refreshOutcomes();
+
+  return el("div", {}, [
+    card(t, [
+      el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text, marginBottom: "4px" } }, ["How is it now?"]),
+      el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } }, ["Started at " + s.intensityBefore + "/10."]),
+      intensitySlider(t, 5, function(v) { afterVal.v = v; }),
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "What happened?")]),
+      outcomeHolder,
+      noteInput
+    ]),
+    el("div", { style: { marginTop: "16px" } }, [
+      primaryButton(t, "Save and finish", function() {
+        var log = readLS(CRAVING_LOG_KEY, []);
+        log.push({
+          date: dateKey(new Date()),
+          halt: Object.keys(s.halt || {}).filter(function(k) { return s.halt[k]; }),
+          durationMin: s.durationMin,
+          intensityBefore: s.intensityBefore,
+          intensityAfter: afterVal.v,
+          outcome: chosenOutcome.v || "unspecified",
+          note: noteInput.value.trim()
+        });
+        writeLS(CRAVING_LOG_KEY, log);
+        cravingSession = null;
+        render();
+      })
+    ])
+  ]);
+}
+
+function cravingStats(t) {
+  var log = readLS(CRAVING_LOG_KEY, []);
+  if (log.length === 0) return null;
+  var passed = log.filter(function(e) { return e.outcome === "passed"; }).length;
+  var wrap = el("div", { style: { marginTop: "26px" } });
+  wrap.appendChild(sectionLabel(t, "Your track record"));
+  var row = el("div", { style: { display: "flex", gap: "10px", marginBottom: "14px" } }, [
+    el("div", { style: { background: t.cardAlt, borderRadius: "12px", padding: "10px 16px", textAlign: "center", flex: "1" } }, [
+      el("div", { style: { fontFamily: t.display, fontSize: "22px", fontWeight: "900", color: t.primary } }, [String(log.length)]),
+      el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, ["Urges ridden out"])
+    ]),
+    el("div", { style: { background: t.cardAlt, borderRadius: "12px", padding: "10px 16px", textAlign: "center", flex: "1" } }, [
+      el("div", { style: { fontFamily: t.display, fontSize: "22px", fontWeight: "900", color: t.secondary } }, [String(passed)]),
+      el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, ["Passed without using"])
+    ])
+  ]);
+  wrap.appendChild(row);
+
+  log.slice(-8).reverse().forEach(function(e) {
+    var outcomeLabel = e.outcome === "passed" ? "🌊 Passed" : e.outcome === "gave_in" ? "Gave in" : "Logged";
+    wrap.appendChild(card(t, [
+      el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "4px" } }, [
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.secondary } }, [e.date]),
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.text } }, [outcomeLabel])
+      ]),
+      el("div", { style: { fontSize: "12px", color: t.textMuted } }, ["Intensity " + e.intensityBefore + " → " + e.intensityAfter + " · " + e.durationMin + " min" + (e.halt && e.halt.length ? " · " + e.halt.join(", ") : "")]),
+      e.note ? el("div", { style: { fontSize: "13px", color: t.text, marginTop: "6px" } }, [e.note]) : null
+    ], { marginBottom: "10px" }));
+  });
+  return wrap;
+}
+
+/* ===========================================================
+   TRIGGER / WARNING SIGNS LOG
+   A lighter-weight companion to the timer above — for noting what
+   pulled at you (people, places, feelings, situations) even when it
+   didn't rise to a full craving session, so patterns become visible
+   over time.
+=========================================================== */
+var TRIGGER_LOG_KEY = "craving:triggers";
+var TRIGGER_TAGS = [
+  "Stress", "Boredom", "Loneliness", "Conflict / argument", "Celebration or party",
+  "Payday", "A specific person", "A specific place", "Poor sleep",
+  "Anniversary / holiday", "Seeing others use", "Physical pain"
+];
+
+function renderTriggerLogForm(t) {
+  var selected = {};
+  var severity = { v: 5 };
+
+  var chipHolder = el("div");
+  function refreshChips() {
+    chipHolder.innerHTML = "";
+    var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+    TRIGGER_TAGS.forEach(function(tag) {
+      var active = !!selected[tag];
+      row.appendChild(el("button", {
+        type: "button",
+        onclick: function() { selected[tag] = !selected[tag]; refreshChips(); },
+        style: {
+          background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text,
+          border: "1px solid " + (active ? t.primary : t.border), borderRadius: "999px",
+          padding: "7px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer"
+        }
+      }, [tag]));
+    });
+    chipHolder.appendChild(row);
+  }
+  refreshChips();
+
+  var customInput = el("input", {
+    placeholder: "Something else? Add your own (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", boxSizing: "border-box" }
+  });
+  var noteInput = el("textarea", {
+    rows: "2", placeholder: "Anything else worth noting? (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+  });
+
+  var warnDiv = el("div", { style: { color: t.accent, fontSize: "12px", marginTop: "8px", display: "none" } },
+    ["Pick at least one trigger, add your own, or leave a note before logging."]);
+
+  return card(t, [
+    el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
+      el("span", { style: { fontSize: "20px" } }, ["🚩"]),
+      el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text } }, ["Triggers & warning signs"])
+    ]),
+    el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } },
+      ["Notice something pulling at you today, even if you didn't act on it? Log it here — patterns get easier to spot over time."]),
+    chipHolder,
+    customInput,
+    el("div", { style: { marginTop: "16px" } }, [sectionLabel(t, "How strong was the pull, 1–10?")]),
+    intensitySlider(t, 5, function(v) { severity.v = v; }),
+    noteInput,
+    warnDiv,
+    el("div", { style: { marginTop: "14px" } }, [
+      primaryButton(t, "Log this", function() {
+        var tags = Object.keys(selected).filter(function(k) { return selected[k]; });
+        if (customInput.value.trim()) tags.push(customInput.value.trim());
+        var note = noteInput.value.trim();
+        if (tags.length === 0 && !note) {
+          warnDiv.style.display = "block";
+          return;
+        }
+        var log = readLS(TRIGGER_LOG_KEY, []);
+        log.push({ date: dateKey(new Date()), tags: tags, severity: severity.v, note: note });
+        writeLS(TRIGGER_LOG_KEY, log);
+        render();
+      })
+    ])
+  ]);
+}
+
+function renderTriggerLogHistory(t) {
+  var log = readLS(TRIGGER_LOG_KEY, []);
+  if (log.length === 0) return null;
+
+  var tally = {};
+  log.forEach(function(e) { (e.tags || []).forEach(function(tag) { tally[tag] = (tally[tag] || 0) + 1; }); });
+  var topTags = Object.keys(tally).sort(function(a, b) { return tally[b] - tally[a]; }).slice(0, 5);
+
+  var wrap = el("div", { style: { marginTop: "20px" } });
+  if (topTags.length > 0) {
+    wrap.appendChild(sectionLabel(t, "Your most common triggers"));
+    var tallyRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" } });
+    topTags.forEach(function(tag) {
+      tallyRow.appendChild(el("div", {
+        style: { background: t.cardAlt, border: "1px solid " + t.border, borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "700", color: t.text }
+      }, [tag + " · " + tally[tag]]));
+    });
+    wrap.appendChild(tallyRow);
+  }
+
+  wrap.appendChild(sectionLabel(t, "Recent log"));
+  log.slice(-8).reverse().forEach(function(e) {
+    wrap.appendChild(card(t, [
+      el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "4px" } }, [
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.secondary } }, [e.date]),
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.text } }, ["Pull: " + e.severity + "/10"])
+      ]),
+      (e.tags && e.tags.length) ? el("div", { style: { fontSize: "12px", color: t.textMuted } }, [e.tags.join(", ")]) : null,
+      e.note ? el("div", { style: { fontSize: "13px", color: t.text, marginTop: "6px" } }, [e.note]) : null
+    ], { marginBottom: "10px" }));
+  });
+  return wrap;
+}
+
+function renderCravingTab(t) {
+  var wrap = el("div");
+  wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
+    el("span", { style: { fontSize: "22px" } }, ["🌊"]),
+    el("h2", { style: { fontFamily: t.display, fontSize: "22px", margin: "0", color: t.text } }, ["Ride the Wave"])
+  ]));
+  wrap.appendChild(el("p", { style: { color: t.textMuted, fontSize: "14px", marginTop: "4px", marginBottom: "18px" } },
+    ["A guided timer for riding out a craving instead of acting on it."]));
+
+  if (!cravingSession || cravingSession.phase === "setup") {
+    wrap.appendChild(renderCravingSetup(t));
+    var stats = cravingStats(t);
+    if (stats) wrap.appendChild(stats);
+    wrap.appendChild(el("div", { style: { marginTop: "26px" } }, [renderTriggerLogForm(t)]));
+    var triggerHistory = renderTriggerLogHistory(t);
+    if (triggerHistory) wrap.appendChild(triggerHistory);
+  } else if (cravingSession.phase === "active") {
+    wrap.appendChild(renderCravingActive(t));
+  } else {
+    wrap.appendChild(renderCravingCheckin(t));
+  }
 
   return wrap;
 }
@@ -538,6 +1133,7 @@ function renderJournalTab(t) {
     primaryButton(t, "Save entry", function() {
       entry.text = textarea.value;
       writeLS(key, entry);
+      if (entry.text.trim()) recordStatDate("stats:journalDates", dateKey(today));
       flashSpan.style.display = "inline";
       setTimeout(function() { flashSpan.style.display = "none"; }, 1800);
     }),
@@ -564,7 +1160,6 @@ function renderJournalTab(t) {
    RESOURCES TAB
 =========================================================== */
 function renderResourcesTab(t) {
-  var zip = "";
   var wrap = el("div");
   wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
     el("span", { style: { fontSize: "22px" } }, ["\uD83D\uDCCD"]),
@@ -710,6 +1305,63 @@ function renderResourcesTab(t) {
 }
 
 /* ===========================================================
+   DATA EXPORT / IMPORT
+   Everything lives in localStorage only — no account, no server — so
+   losing the browser (cache clear, new device) means losing months of
+   entries. Export bundles every Anchorpoint key into one JSON file the
+   user can save anywhere; import restores it, replacing what's on the
+   device.
+=========================================================== */
+function exportAllData() {
+  var payload = { app: "anchorpoint", version: 1, exportedAt: new Date().toISOString(), data: {} };
+  for (var i = 0; i < localStorage.length; i++) {
+    var k = localStorage.key(i);
+    payload.data[k] = localStorage.getItem(k);
+  }
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = el("a", { href: url, download: "anchorpoint-backup-" + dateKey(new Date()) + ".json" });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+// Persists an import/export status message across the render() the
+// settings tab triggers right after a successful/failed import (see below).
+var settingsFlash = null;
+
+function importAllData(file, onDone) {
+  var reader = new FileReader();
+  reader.onload = function() {
+    var parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (e) {
+      onDone(false, "That file doesn't look like a valid Anchorpoint backup.");
+      return;
+    }
+    if (!parsed || typeof parsed.data !== "object" || parsed.data === null) {
+      onDone(false, "That file doesn't look like a valid Anchorpoint backup.");
+      return;
+    }
+    var keys = Object.keys(parsed.data);
+    if (keys.length === 0) {
+      onDone(false, "That backup file is empty.");
+      return;
+    }
+    if (!window.confirm("Importing will replace all Anchorpoint data currently on this device (" + keys.length + " item" + (keys.length === 1 ? "" : "s") + " in this backup). This can't be undone. Continue?")) {
+      onDone(false, null);
+      return;
+    }
+    localStorage.clear();
+    keys.forEach(function(k) { localStorage.setItem(k, parsed.data[k]); });
+    onDone(true, null);
+  };
+  reader.onerror = function() { onDone(false, "Couldn't read that file."); };
+  reader.readAsText(file);
+}
+
+/* ===========================================================
    SETTINGS TAB
 =========================================================== */
 function renderSettingsTab(t) {
@@ -737,6 +1389,51 @@ function renderSettingsTab(t) {
   });
   themeSection.appendChild(grid);
   wrap.appendChild(themeSection);
+
+  // render() below rebuilds the whole tab (fresh DOM, including a new
+  // importStatus node), so a message set on the *current* node and
+  // followed by render() would be destroyed before ever being seen. Keep
+  // it in a module-level var that survives the re-render and gets read
+  // back out below instead.
+  var importStatus = el("div", {
+    style: { fontSize: "12px", marginTop: "10px", display: settingsFlash ? "block" : "none", color: settingsFlash ? t[settingsFlash.color] : t.text }
+  }, [settingsFlash ? settingsFlash.text : ""]);
+  var fileInput = el("input", { type: "file", accept: "application/json", style: { display: "none" } });
+  fileInput.addEventListener("change", function() {
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (!file) return;
+    importAllData(file, function(success, errorMsg) {
+      if (success) {
+        settingsFlash = { color: "secondary", text: "Backup imported. Your data has been restored." };
+        state.theme = readLS("settings:theme", "anchorpoint");
+        cravingSession = null;
+      } else if (errorMsg) {
+        settingsFlash = { color: "accent", text: errorMsg };
+      } else {
+        return; // user cancelled the confirm — nothing changed
+      }
+      render();
+      var thisFlash = settingsFlash;
+      setTimeout(function() {
+        if (settingsFlash === thisFlash) { settingsFlash = null; if (state.tab === "settings") render(); }
+      }, 4000);
+    });
+  });
+  var dataCard = card(t, [
+    el("div", { style: { fontSize: "13px", color: t.text, marginBottom: "12px" } },
+      ["Everything you write — gratitude, journal entries, sobriety dates, urge logs — lives only in this browser. Export a backup regularly, especially before switching devices or clearing your browser data."]),
+    el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap" } }, [
+      primaryButton(t, "⬇️ Export backup", exportAllData),
+      el("button", {
+        onclick: function() { fileInput.click(); },
+        style: { background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "12px", padding: "12px 18px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }
+      }, ["⬆️ Import backup"])
+    ]),
+    fileInput,
+    importStatus
+  ]);
+  wrap.appendChild(el("div", { style: { marginTop: "24px" } }, [sectionLabel(t, "Your data"), dataCard]));
 
   var feedbackCard = card(t, [
     el("div", { style: { fontSize: "13px", color: t.text, marginBottom: "10px" } }, ["This app is in beta. Found a bug or have an idea? We'd love to hear it."]),

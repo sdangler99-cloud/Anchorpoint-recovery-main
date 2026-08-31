@@ -1,0 +1,33 @@
+{
+  "root": true,
+  "parserOptions": {
+    "ecmaVersion": 2021,
+    "sourceType": "script"
+  },
+  "rules": {
+    "no-undef": "error",
+    "no-unused-vars": ["warn", { "args": "none" }]
+  },
+  "overrides": [
+    {
+      "files": ["data.js"],
+      "env": { "browser": true, "es2021": true }
+    },
+    {
+      "files": ["app.js"],
+      "env": { "browser": true, "es2021": true },
+      "globals": {
+        "THEMES": "readonly",
+        "TOPIC_DECK": "readonly",
+        "QUOTES": "readonly",
+        "RESOURCE_CATEGORIES": "readonly",
+        "dateKey": "readonly",
+        "dayOfYear": "readonly"
+      }
+    },
+    {
+      "files": ["service-worker.js"],
+      "env": { "serviceworker": true, "es2021": true }
+    }
+  ]
+}

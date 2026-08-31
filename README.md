@@ -2,9 +2,9 @@
 
 **For When You Need To Climb Out**
 
-A free, installable daily companion for recovery: morning gratitude journaling, a sobriety tracker with milestone badges, a nightly reflection journal with a new prompt every day of the year, and a directory of local/national support resources.
+A free, installable daily companion for recovery: morning gratitude journaling, a sobriety tracker with milestone badges, a guided "urge surfing" craving timer, a nightly reflection journal with a new prompt every day of the year, and a directory of local/national support resources.
 
-It's a static, single-page app — vanilla HTML/CSS/JS, no framework, no build step, no dependencies. All user data (gratitude entries, journal entries, sobriety dates, theme choice) is stored in the browser's `localStorage`; nothing is sent to a server.
+It's a static, single-page app — vanilla HTML/CSS/JS, no framework, no build step, no dependencies. All user data (gratitude entries, journal entries, sobriety dates, craving logs, theme choice) is stored in the browser's `localStorage`; nothing is sent to a server. Since it's all local, the Settings tab can export it to a JSON backup file and import it back (e.g. onto a new device).
 
 ## Project layout
 
