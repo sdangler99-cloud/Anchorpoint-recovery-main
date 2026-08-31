@@ -746,6 +746,121 @@ function cravingStats(t) {
   return wrap;
 }
 
+/* ===========================================================
+   TRIGGER / WARNING SIGNS LOG
+   A lighter-weight companion to the timer above — for noting what
+   pulled at you (people, places, feelings, situations) even when it
+   didn't rise to a full craving session, so patterns become visible
+   over time.
+=========================================================== */
+var TRIGGER_LOG_KEY = "craving:triggers";
+var TRIGGER_TAGS = [
+  "Stress", "Boredom", "Loneliness", "Conflict / argument", "Celebration or party",
+  "Payday", "A specific person", "A specific place", "Poor sleep",
+  "Anniversary / holiday", "Seeing others use", "Physical pain"
+];
+
+function renderTriggerLogForm(t) {
+  var selected = {};
+  var severity = { v: 5 };
+
+  var chipHolder = el("div");
+  function refreshChips() {
+    chipHolder.innerHTML = "";
+    var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+    TRIGGER_TAGS.forEach(function(tag) {
+      var active = !!selected[tag];
+      row.appendChild(el("button", {
+        type: "button",
+        onclick: function() { selected[tag] = !selected[tag]; refreshChips(); },
+        style: {
+          background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text,
+          border: "1px solid " + (active ? t.primary : t.border), borderRadius: "999px",
+          padding: "7px 12px", fontSize: "12px", fontWeight: "700", cursor: "pointer"
+        }
+      }, [tag]));
+    });
+    chipHolder.appendChild(row);
+  }
+  refreshChips();
+
+  var customInput = el("input", {
+    placeholder: "Something else? Add your own (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", boxSizing: "border-box" }
+  });
+  var noteInput = el("textarea", {
+    rows: "2", placeholder: "Anything else worth noting? (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+  });
+
+  var warnDiv = el("div", { style: { color: t.accent, fontSize: "12px", marginTop: "8px", display: "none" } },
+    ["Pick at least one trigger, add your own, or leave a note before logging."]);
+
+  return card(t, [
+    el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
+      el("span", { style: { fontSize: "20px" } }, ["🚩"]),
+      el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text } }, ["Triggers & warning signs"])
+    ]),
+    el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } },
+      ["Notice something pulling at you today, even if you didn't act on it? Log it here — patterns get easier to spot over time."]),
+    chipHolder,
+    customInput,
+    el("div", { style: { marginTop: "16px" } }, [sectionLabel(t, "How strong was the pull, 1–10?")]),
+    intensitySlider(t, 5, function(v) { severity.v = v; }),
+    noteInput,
+    warnDiv,
+    el("div", { style: { marginTop: "14px" } }, [
+      primaryButton(t, "Log this", function() {
+        var tags = Object.keys(selected).filter(function(k) { return selected[k]; });
+        if (customInput.value.trim()) tags.push(customInput.value.trim());
+        var note = noteInput.value.trim();
+        if (tags.length === 0 && !note) {
+          warnDiv.style.display = "block";
+          return;
+        }
+        var log = readLS(TRIGGER_LOG_KEY, []);
+        log.push({ date: dateKey(new Date()), tags: tags, severity: severity.v, note: note });
+        writeLS(TRIGGER_LOG_KEY, log);
+        render();
+      })
+    ])
+  ]);
+}
+
+function renderTriggerLogHistory(t) {
+  var log = readLS(TRIGGER_LOG_KEY, []);
+  if (log.length === 0) return null;
+
+  var tally = {};
+  log.forEach(function(e) { (e.tags || []).forEach(function(tag) { tally[tag] = (tally[tag] || 0) + 1; }); });
+  var topTags = Object.keys(tally).sort(function(a, b) { return tally[b] - tally[a]; }).slice(0, 5);
+
+  var wrap = el("div", { style: { marginTop: "20px" } });
+  if (topTags.length > 0) {
+    wrap.appendChild(sectionLabel(t, "Your most common triggers"));
+    var tallyRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "16px" } });
+    topTags.forEach(function(tag) {
+      tallyRow.appendChild(el("div", {
+        style: { background: t.cardAlt, border: "1px solid " + t.border, borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "700", color: t.text }
+      }, [tag + " · " + tally[tag]]));
+    });
+    wrap.appendChild(tallyRow);
+  }
+
+  wrap.appendChild(sectionLabel(t, "Recent log"));
+  log.slice(-8).reverse().forEach(function(e) {
+    wrap.appendChild(card(t, [
+      el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "4px" } }, [
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.secondary } }, [e.date]),
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.text } }, ["Pull: " + e.severity + "/10"])
+      ]),
+      (e.tags && e.tags.length) ? el("div", { style: { fontSize: "12px", color: t.textMuted } }, [e.tags.join(", ")]) : null,
+      e.note ? el("div", { style: { fontSize: "13px", color: t.text, marginTop: "6px" } }, [e.note]) : null
+    ], { marginBottom: "10px" }));
+  });
+  return wrap;
+}
+
 function renderCravingTab(t) {
   var wrap = el("div");
   wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
@@ -759,6 +874,9 @@ function renderCravingTab(t) {
     wrap.appendChild(renderCravingSetup(t));
     var stats = cravingStats(t);
     if (stats) wrap.appendChild(stats);
+    wrap.appendChild(el("div", { style: { marginTop: "26px" } }, [renderTriggerLogForm(t)]));
+    var triggerHistory = renderTriggerLogHistory(t);
+    if (triggerHistory) wrap.appendChild(triggerHistory);
   } else if (cravingSession.phase === "active") {
     wrap.appendChild(renderCravingActive(t));
   } else {

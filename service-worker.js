@@ -1,7 +1,7 @@
 // Anchorpoint service worker — enables offline use and installability.
 // Bump this version any time index.html (or any cached file) changes,
 // so returning users get the update instead of a stale cached copy.
-const CACHE_VERSION = "anchorpoint-v7";
+const CACHE_VERSION = "anchorpoint-v8";
 
 const CORE_ASSETS = [
   "./",
