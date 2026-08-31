@@ -374,6 +374,14 @@ function durationSince(dateStr) {
   if (months < 0) { years -= 1; months += 12; }
   return { years: years, months: months, days: days, totalDays: totalDays };
 }
+// Days between two dateKey() strings — used to size an archived streak at
+// the moment it's reset, independent of "now" (unlike durationSince, which
+// always measures up to the present and so can't describe a closed streak).
+function daysBetween(fromStr, toStr) {
+  var a = new Date(fromStr + "T00:00:00");
+  var b = new Date(toStr + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
 var MILESTONES = [
   { label: "1 Day", value: 1 },
   { label: "7 Days", value: 7 },
@@ -497,6 +505,18 @@ function renderSobrietyTab(t) {
 
     var statsHolder = el("div");
     var badgesHolder = el("div");
+    var resetHolder = el("div");
+    var historyHolder = el("div");
+    var resetPanelOpen = { v: false };
+
+    function longestStreakDays() {
+      var history = data[i].history || [];
+      var best = history.reduce(function(max, h) { return Math.max(max, h.days || 0); }, 0);
+      var dur = durationSince(dateInput.value);
+      if (dur && !dur.invalid) best = Math.max(best, dur.totalDays);
+      return best;
+    }
+
     function renderStats() {
       statsHolder.innerHTML = "";
       badgesHolder.innerHTML = "";
@@ -515,6 +535,12 @@ function renderSobrietyTab(t) {
         ]));
         statsHolder.appendChild(row);
 
+        if ((data[i].history || []).length > 0) {
+          var longest = longestStreakDays();
+          statsHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
+            ["\ud83c\udfc6 Longest streak so far: " + longest + " day" + (longest === 1 ? "" : "s") + "."]));
+        }
+
         var badgeLabel = el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: "16px", marginBottom: "8px" } }, ["Milestone Awards"]);
         badgesHolder.appendChild(badgeLabel);
         var milestoneResult = milestoneBadgeRow(t, MILESTONES, dur.totalDays);
@@ -530,19 +556,107 @@ function renderSobrietyTab(t) {
         statsHolder.appendChild(el("div", { style: { marginTop: "10px", color: t.accent, fontSize: "12px", fontWeight: "700" } }, ["That date is in the future \u2014 double check it."]));
       }
     }
+
+    function renderResetPanel() {
+      resetHolder.innerHTML = "";
+      if (!dateInput.value) return;
+
+      if (!resetPanelOpen.v) {
+        resetHolder.appendChild(el("button", {
+          type: "button",
+          onclick: function() { resetPanelOpen.v = true; renderResetPanel(); },
+          style: { background: "none", border: "none", color: t.textMuted, fontSize: "12px", fontWeight: "700", textDecoration: "underline", cursor: "pointer", padding: "4px 0", marginTop: "16px" }
+        }, ["Had a setback? Log a reset"]));
+        return;
+      }
+
+      var resetDateInput = el("input", {
+        type: "date", max: dateKey(new Date()), min: dateInput.value,
+        style: { width: "100%", marginTop: "4px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", boxSizing: "border-box" }
+      });
+      resetDateInput.value = dateKey(new Date());
+      var resetNoteInput = el("textarea", {
+        rows: "2", placeholder: "What happened, or what would help next time? (optional, just for you)",
+        style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+      });
+      var warnDiv = el("div", { style: { color: t.accent, fontSize: "12px", marginTop: "8px", display: "none" } },
+        ["The reset date can't be before your current streak started."]);
+
+      resetHolder.appendChild(card(t, [
+        el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "14px", color: t.text, marginBottom: "4px" } }, ["Log a reset"]),
+        el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } },
+          ["Setbacks are part of recovery for a lot of people \u2014 this isn't erased. Your current streak is saved to your history below, and a new count starts from the date you pick."]),
+        el("label", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700" } }, ["Reset date"]),
+        resetDateInput,
+        resetNoteInput,
+        warnDiv,
+        el("div", { style: { display: "flex", gap: "10px", marginTop: "12px" } }, [
+          el("button", {
+            type: "button",
+            onclick: function() { resetPanelOpen.v = false; renderResetPanel(); },
+            style: { flex: "1", padding: "12px", borderRadius: "12px", border: "1px solid " + t.border, background: "none", color: t.text, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+          }, ["Cancel"]),
+          el("button", {
+            type: "button",
+            onclick: function() {
+              var resetDate = resetDateInput.value;
+              if (!resetDate || resetDate < dateInput.value) {
+                warnDiv.style.display = "block";
+                return;
+              }
+              var history = data[i].history || [];
+              history.push({
+                since: dateInput.value,
+                until: resetDate,
+                days: daysBetween(dateInput.value, resetDate),
+                note: resetNoteInput.value.trim()
+              });
+              data[i].history = history;
+              data[i].since = resetDate;
+              writeLS("sobriety:tracker", data);
+              dateInput.value = resetDate;
+              resetPanelOpen.v = false;
+              renderStats();
+              renderResetPanel();
+              renderHistory();
+            },
+            style: { flex: "1", padding: "12px", borderRadius: "12px", border: "none", background: t.primary, color: t.primaryText, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+          }, ["Confirm reset"])
+        ])
+      ], { marginTop: "16px", background: t.cardAlt }));
+    }
+
+    function renderHistory() {
+      historyHolder.innerHTML = "";
+      var history = (data[i].history || []).slice().reverse();
+      if (history.length === 0) return;
+      historyHolder.appendChild(el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: "18px", marginBottom: "8px" } }, ["Past streaks"]));
+      history.forEach(function(h) {
+        historyHolder.appendChild(el("div", { style: { background: t.bgSoft, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px 12px", marginBottom: "8px" } }, [
+          el("div", { style: { fontSize: "13px", color: t.text, fontWeight: "700" } }, [h.since + " \u2192 " + h.until + " \u00b7 " + h.days + " day" + (h.days === 1 ? "" : "s")]),
+          h.note ? el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "4px" } }, [h.note]) : null
+        ]));
+      });
+    }
+
     dateInput.addEventListener("change", function() {
       data[i].since = dateInput.value;
       writeLS("sobriety:tracker", data);
       renderStats();
+      renderResetPanel();
     });
     renderStats();
+    renderResetPanel();
+    renderHistory();
 
     wrap.appendChild(card(t, [
       nameInput,
       el("label", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700" } }, ["Clean since (month / day / year)"]),
       dateInput,
       statsHolder,
-      badgesHolder
+      badgesHolder,
+      resetHolder,
+      historyHolder
     ], { marginBottom: "14px" }));
   });
 
