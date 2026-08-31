@@ -378,7 +378,7 @@ var MILESTONES = [
 ];
 function renderSobrietyTab(t) {
   var data = readLS("sobriety:tracker", [
-    { name: "Alcohol", since: "" }, { name: "Substance 2", since: "" }, { name: "Substance 3", since: "" },
+    { name: "Substance 1", since: "" }, { name: "Substance 2", since: "" }, { name: "Substance 3", since: "" },
     { name: "Substance 4", since: "" }, { name: "Substance 5", since: "" }
   ]);
   var wrap = el("div");
