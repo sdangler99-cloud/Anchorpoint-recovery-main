@@ -104,6 +104,7 @@ function render() {
   var tabRenderers = {
     gratitude: renderGratitudeTab,
     sobriety: renderSobrietyTab,
+    craving: renderCravingTab,
     journal: renderJournalTab,
     resources: renderResourcesTab,
     settings: renderSettingsTab
@@ -172,6 +173,7 @@ function quoteCard(t) {
 var TABS = [
   { key: "gratitude", label: "Morning", icon: "\u2600\uFE0F" },
   { key: "sobriety", label: "Sobriety", icon: "\uD83D\uDD25" },
+  { key: "craving", label: "Urge", icon: "\uD83C\uDF0A" },
   { key: "journal", label: "Evening", icon: "\uD83C\uDF19" },
   { key: "resources", label: "Resources", icon: "\uD83D\uDCCD" },
   { key: "settings", label: "Settings", icon: "\u2699\uFE0F" }
@@ -246,17 +248,21 @@ function bottomBar(t) {
 }
 
 function bottomNav(t) {
+  // flex:1 + minWidth:0 + ellipsis on the label (rather than space-around
+  // with fixed padding) keeps all tabs reachable at once as more are added —
+  // items shrink together instead of the last one getting pushed off-screen
+  // on narrow phones.
   var nav = el("div", {
-    style: { background: t.bgSoft, borderTop: "1px solid " + t.border, display: "flex", justifyContent: "space-around", padding: "8px 4px calc(8px + env(safe-area-inset-bottom, 0px))" }
+    style: { background: t.bgSoft, borderTop: "1px solid " + t.border, display: "flex", padding: "8px 2px calc(8px + env(safe-area-inset-bottom, 0px))" }
   });
   TABS.forEach(function(tb) {
     var active = state.tab === tb.key;
     var btn = el("button", {
       onclick: function() { state.tab = tb.key; render(); },
-      style: { background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "6px 10px", cursor: "pointer", color: active ? t.primary : t.textMuted }
+      style: { flex: "1 1 0", minWidth: "0", background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: "3px", padding: "6px 2px", cursor: "pointer", color: active ? t.primary : t.textMuted }
     }, [
-      el("span", { style: { fontSize: "18px" } }, [tb.icon]),
-      el("span", { style: { fontSize: "10px", fontWeight: "700" } }, [tb.label])
+      el("span", { style: { fontSize: "17px" } }, [tb.icon]),
+      el("span", { style: { fontSize: "9px", fontWeight: "700", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, [tb.label])
     ]);
     nav.appendChild(btn);
   });
@@ -471,6 +477,293 @@ function renderSobrietyTab(t) {
       badgesHolder
     ], { marginBottom: "14px" }));
   });
+
+  return wrap;
+}
+
+/* ===========================================================
+   URGE / CRAVING TAB
+   Urges peak and pass like a wave, usually within 10-20 minutes.
+   This is a guided "urge surfing" timer: a quick HALT + intensity
+   check-in, a paced-breathing countdown, then a check-in on the
+   way out that gets logged so patterns become visible over time.
+=========================================================== */
+var CRAVING_LOG_KEY = "craving:log";
+var HALT_OPTIONS = [
+  { key: "hungry", label: "Hungry", icon: "🍽️" },
+  { key: "angry", label: "Angry / Anxious", icon: "😤" },
+  { key: "lonely", label: "Lonely", icon: "🙋" },
+  { key: "tired", label: "Tired", icon: "😴" }
+];
+var CRAVING_DURATIONS = [5, 10, 15, 20];
+
+// Ephemeral (not persisted) — an in-progress session shouldn't survive a
+// browser restart, but should survive switching tabs and coming back, so
+// remaining time is computed from a stored end timestamp rather than a
+// counter that would desync while the tab isn't mounted.
+var cravingSession = null;
+
+function newCravingSession() {
+  return { phase: "setup", halt: {}, intensityBefore: 5, durationMin: 10 };
+}
+function formatCountdown(ms) {
+  var totalSec = Math.max(0, Math.ceil(ms / 1000));
+  var m = Math.floor(totalSec / 60);
+  var s = totalSec % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+// One persistent ticker (mirrors the ad-container pattern above) instead of
+// creating/tearing down an interval on every tab switch. It only triggers a
+// re-render while the craving tab is actually mounted and a timer is running.
+setInterval(function() {
+  if (!cravingSession || cravingSession.phase !== "active") return;
+  if (Date.now() >= cravingSession.endsAt) cravingSession.phase = "checkin";
+  if (state.tab === "craving") render();
+}, 1000);
+
+function haltChipRow(t, selected, onToggle) {
+  var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+  HALT_OPTIONS.forEach(function(opt) {
+    var active = !!selected[opt.key];
+    row.appendChild(el("button", {
+      type: "button",
+      onclick: function() { onToggle(opt.key); },
+      style: {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text,
+        border: "1px solid " + (active ? t.primary : t.border), borderRadius: "999px",
+        padding: "8px 14px", fontSize: "13px", fontWeight: "700", cursor: "pointer"
+      }
+    }, [opt.icon + " " + opt.label]));
+  });
+  return row;
+}
+function intensitySlider(t, value, onChange) {
+  var display = el("div", { style: { fontFamily: t.display, fontSize: "28px", fontWeight: "900", color: t.primary, textAlign: "center", marginBottom: "6px" } }, [String(value)]);
+  var input = el("input", {
+    type: "range", min: "1", max: "10", step: "1",
+    style: { width: "100%" }
+  });
+  input.value = String(value);
+  input.addEventListener("input", function() {
+    display.textContent = input.value;
+    onChange(parseInt(input.value, 10));
+  });
+  var labels = el("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "11px", color: t.textMuted, fontWeight: "700", marginTop: "2px" } }, [
+    el("span", {}, ["Barely there"]), el("span", {}, ["Overwhelming"])
+  ]);
+  return el("div", {}, [display, input, labels]);
+}
+
+function renderCravingSetup(t) {
+  if (!cravingSession) cravingSession = newCravingSession();
+  var s = cravingSession;
+
+  var haltHolder = el("div");
+  function refreshHalt() {
+    haltHolder.innerHTML = "";
+    haltHolder.appendChild(haltChipRow(t, s.halt, function(key) {
+      s.halt[key] = !s.halt[key];
+      refreshHalt();
+    }));
+  }
+  refreshHalt();
+
+  var durationRow = el("div", { style: { display: "flex", gap: "8px" } });
+  function refreshDuration() {
+    durationRow.innerHTML = "";
+    CRAVING_DURATIONS.forEach(function(mins) {
+      var active = s.durationMin === mins;
+      durationRow.appendChild(el("button", {
+        type: "button",
+        onclick: function() { s.durationMin = mins; refreshDuration(); },
+        style: {
+          flex: "1", padding: "10px", borderRadius: "10px", cursor: "pointer", fontWeight: "800", fontSize: "13px",
+          background: active ? t.primary : t.bgSoft, color: active ? t.primaryText : t.text, border: "1px solid " + (active ? t.primary : t.border)
+        }
+      }, [mins + " min"]));
+    });
+  }
+  refreshDuration();
+
+  return el("div", {}, [
+    card(t, [
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" } }, [
+        el("span", { style: { fontSize: "28px" } }, ["🌊"]),
+        el("div", {}, [
+          el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text } }, ["Having an urge?"]),
+          el("div", { style: { fontSize: "12px", color: t.textMuted } }, ["Urges peak and fall like a wave — most pass within 10–20 minutes. You don't have to act on it."])
+        ])
+      ]),
+      sectionLabel(t, "What's going on right now? (optional)"),
+      haltHolder,
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "How strong is it, 1–10?")]),
+      intensitySlider(t, s.intensityBefore, function(v) { s.intensityBefore = v; }),
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "Ride it out for")]),
+      durationRow
+    ]),
+    el("div", { style: { marginTop: "16px" } }, [
+      primaryButton(t, "Start riding the wave", function() {
+        var now = Date.now();
+        s.startedAt = now;
+        s.endsAt = now + s.durationMin * 60 * 1000;
+        s.phase = "active";
+        render();
+      })
+    ])
+  ]);
+}
+
+function renderCravingActive(t) {
+  var s = cravingSession;
+  var remaining = s.endsAt - Date.now();
+  var pct = Math.min(1, Math.max(0, 1 - remaining / (s.durationMin * 60 * 1000)));
+
+  var breathCircle = el("div", {
+    style: {
+      width: "150px", height: "150px", borderRadius: "50%", margin: "10px auto",
+      background: "radial-gradient(circle at 40% 35%, " + t.primary + ", " + t.secondary + ")",
+      animation: "anchorpoint-breathe 8s ease-in-out infinite",
+      boxShadow: "0 0 40px " + t.primary + "55"
+    }
+  });
+
+  var selectedHalt = Object.keys(s.halt || {}).filter(function(k) { return s.halt[k]; });
+  var haltLine = selectedHalt.length
+    ? el("div", { style: { fontSize: "12px", color: t.textMuted, textAlign: "center", marginTop: "4px" } },
+        ["Noted: " + selectedHalt.map(function(k) { var o = HALT_OPTIONS.find(function(x) { return x.key === k; }); return o ? o.label : k; }).join(", ")])
+    : null;
+
+  var body = [
+    el("div", { style: { fontSize: "13px", color: t.textMuted, textAlign: "center", fontWeight: "700" } }, ["Breathe in slowly as it grows… out slowly as it shrinks."]),
+    breathCircle,
+    el("div", { style: { fontFamily: t.display, fontSize: "40px", fontWeight: "900", color: t.text, textAlign: "center" } }, [formatCountdown(remaining)]),
+    el("div", { style: { fontSize: "12px", color: t.textMuted, textAlign: "center", marginBottom: "4px" } }, ["remaining · " + Math.round(pct * 100) + "% through"])
+  ];
+  if (haltLine) body.push(haltLine);
+
+  var actions = el("div", { style: { display: "flex", gap: "10px", marginTop: "16px" } }, [
+    el("button", {
+      onclick: function() { s.endsAt += 5 * 60 * 1000; s.durationMin += 5; render(); },
+      style: { flex: "1", padding: "12px", borderRadius: "12px", border: "1px solid " + t.border, background: t.bgSoft, color: t.text, fontWeight: "700", fontSize: "13px", cursor: "pointer" }
+    }, ["+5 more minutes"]),
+    primaryButton(t, "I'm through it", function() { s.phase = "checkin"; render(); })
+  ]);
+
+  return el("div", {}, [card(t, body), actions]);
+}
+
+function renderCravingCheckin(t) {
+  var s = cravingSession;
+  var afterVal = { v: 5 };
+  var outcomeHolder = el("div");
+  var chosenOutcome = { v: null };
+  var noteInput = el("textarea", {
+    rows: "3", placeholder: "Anything worth remembering for next time? (optional)",
+    style: { width: "100%", marginTop: "10px", background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px", padding: "10px", fontSize: "14px", resize: "vertical", boxSizing: "border-box" }
+  });
+
+  function refreshOutcomes() {
+    outcomeHolder.innerHTML = "";
+    var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+    [
+      { key: "passed", label: "🌊 It passed", color: t.secondary },
+      { key: "gave_in", label: "I gave in", color: t.accent }
+    ].forEach(function(opt) {
+      var active = chosenOutcome.v === opt.key;
+      row.appendChild(el("button", {
+        type: "button",
+        onclick: function() { chosenOutcome.v = opt.key; refreshOutcomes(); },
+        style: {
+          flex: "1 1 120px", padding: "10px", borderRadius: "10px", cursor: "pointer", fontWeight: "800", fontSize: "13px",
+          background: active ? opt.color : t.bgSoft, color: active ? t.primaryText : t.text, border: "1px solid " + (active ? opt.color : t.border)
+        }
+      }, [opt.label]));
+    });
+    outcomeHolder.appendChild(row);
+  }
+  refreshOutcomes();
+
+  return el("div", {}, [
+    card(t, [
+      el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "16px", color: t.text, marginBottom: "4px" } }, ["How is it now?"]),
+      el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } }, ["Started at " + s.intensityBefore + "/10."]),
+      intensitySlider(t, 5, function(v) { afterVal.v = v; }),
+      el("div", { style: { marginTop: "18px" } }, [sectionLabel(t, "What happened?")]),
+      outcomeHolder,
+      noteInput
+    ]),
+    el("div", { style: { marginTop: "16px" } }, [
+      primaryButton(t, "Save and finish", function() {
+        var log = readLS(CRAVING_LOG_KEY, []);
+        log.push({
+          date: dateKey(new Date()),
+          halt: Object.keys(s.halt || {}).filter(function(k) { return s.halt[k]; }),
+          durationMin: s.durationMin,
+          intensityBefore: s.intensityBefore,
+          intensityAfter: afterVal.v,
+          outcome: chosenOutcome.v || "unspecified",
+          note: noteInput.value.trim()
+        });
+        writeLS(CRAVING_LOG_KEY, log);
+        cravingSession = null;
+        render();
+      })
+    ])
+  ]);
+}
+
+function cravingStats(t) {
+  var log = readLS(CRAVING_LOG_KEY, []);
+  if (log.length === 0) return null;
+  var passed = log.filter(function(e) { return e.outcome === "passed"; }).length;
+  var wrap = el("div", { style: { marginTop: "26px" } });
+  wrap.appendChild(sectionLabel(t, "Your track record"));
+  var row = el("div", { style: { display: "flex", gap: "10px", marginBottom: "14px" } }, [
+    el("div", { style: { background: t.cardAlt, borderRadius: "12px", padding: "10px 16px", textAlign: "center", flex: "1" } }, [
+      el("div", { style: { fontFamily: t.display, fontSize: "22px", fontWeight: "900", color: t.primary } }, [String(log.length)]),
+      el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, ["Urges ridden out"])
+    ]),
+    el("div", { style: { background: t.cardAlt, borderRadius: "12px", padding: "10px 16px", textAlign: "center", flex: "1" } }, [
+      el("div", { style: { fontFamily: t.display, fontSize: "22px", fontWeight: "900", color: t.secondary } }, [String(passed)]),
+      el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, ["Passed without using"])
+    ])
+  ]);
+  wrap.appendChild(row);
+
+  log.slice(-8).reverse().forEach(function(e) {
+    var outcomeLabel = e.outcome === "passed" ? "🌊 Passed" : e.outcome === "gave_in" ? "Gave in" : "Logged";
+    wrap.appendChild(card(t, [
+      el("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: "4px" } }, [
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.secondary } }, [e.date]),
+        el("div", { style: { fontWeight: "800", fontSize: "13px", color: t.text } }, [outcomeLabel])
+      ]),
+      el("div", { style: { fontSize: "12px", color: t.textMuted } }, ["Intensity " + e.intensityBefore + " → " + e.intensityAfter + " · " + e.durationMin + " min" + (e.halt && e.halt.length ? " · " + e.halt.join(", ") : "")]),
+      e.note ? el("div", { style: { fontSize: "13px", color: t.text, marginTop: "6px" } }, [e.note]) : null
+    ], { marginBottom: "10px" }));
+  });
+  return wrap;
+}
+
+function renderCravingTab(t) {
+  var wrap = el("div");
+  wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
+    el("span", { style: { fontSize: "22px" } }, ["🌊"]),
+    el("h2", { style: { fontFamily: t.display, fontSize: "22px", margin: "0", color: t.text } }, ["Ride the Wave"])
+  ]));
+  wrap.appendChild(el("p", { style: { color: t.textMuted, fontSize: "14px", marginTop: "4px", marginBottom: "18px" } },
+    ["A guided timer for riding out a craving instead of acting on it."]));
+
+  if (!cravingSession || cravingSession.phase === "setup") {
+    wrap.appendChild(renderCravingSetup(t));
+    var stats = cravingStats(t);
+    if (stats) wrap.appendChild(stats);
+  } else if (cravingSession.phase === "active") {
+    wrap.appendChild(renderCravingActive(t));
+  } else {
+    wrap.appendChild(renderCravingCheckin(t));
+  }
 
   return wrap;
 }
@@ -710,6 +1003,63 @@ function renderResourcesTab(t) {
 }
 
 /* ===========================================================
+   DATA EXPORT / IMPORT
+   Everything lives in localStorage only — no account, no server — so
+   losing the browser (cache clear, new device) means losing months of
+   entries. Export bundles every Anchorpoint key into one JSON file the
+   user can save anywhere; import restores it, replacing what's on the
+   device.
+=========================================================== */
+function exportAllData() {
+  var payload = { app: "anchorpoint", version: 1, exportedAt: new Date().toISOString(), data: {} };
+  for (var i = 0; i < localStorage.length; i++) {
+    var k = localStorage.key(i);
+    payload.data[k] = localStorage.getItem(k);
+  }
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  var url = URL.createObjectURL(blob);
+  var a = el("a", { href: url, download: "anchorpoint-backup-" + dateKey(new Date()) + ".json" });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+// Persists an import/export status message across the render() the
+// settings tab triggers right after a successful/failed import (see below).
+var settingsFlash = null;
+
+function importAllData(file, onDone) {
+  var reader = new FileReader();
+  reader.onload = function() {
+    var parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (e) {
+      onDone(false, "That file doesn't look like a valid Anchorpoint backup.");
+      return;
+    }
+    if (!parsed || typeof parsed.data !== "object" || parsed.data === null) {
+      onDone(false, "That file doesn't look like a valid Anchorpoint backup.");
+      return;
+    }
+    var keys = Object.keys(parsed.data);
+    if (keys.length === 0) {
+      onDone(false, "That backup file is empty.");
+      return;
+    }
+    if (!window.confirm("Importing will replace all Anchorpoint data currently on this device (" + keys.length + " item" + (keys.length === 1 ? "" : "s") + " in this backup). This can't be undone. Continue?")) {
+      onDone(false, null);
+      return;
+    }
+    localStorage.clear();
+    keys.forEach(function(k) { localStorage.setItem(k, parsed.data[k]); });
+    onDone(true, null);
+  };
+  reader.onerror = function() { onDone(false, "Couldn't read that file."); };
+  reader.readAsText(file);
+}
+
+/* ===========================================================
    SETTINGS TAB
 =========================================================== */
 function renderSettingsTab(t) {
@@ -737,6 +1087,51 @@ function renderSettingsTab(t) {
   });
   themeSection.appendChild(grid);
   wrap.appendChild(themeSection);
+
+  // render() below rebuilds the whole tab (fresh DOM, including a new
+  // importStatus node), so a message set on the *current* node and
+  // followed by render() would be destroyed before ever being seen. Keep
+  // it in a module-level var that survives the re-render and gets read
+  // back out below instead.
+  var importStatus = el("div", {
+    style: { fontSize: "12px", marginTop: "10px", display: settingsFlash ? "block" : "none", color: settingsFlash ? t[settingsFlash.color] : t.text }
+  }, [settingsFlash ? settingsFlash.text : ""]);
+  var fileInput = el("input", { type: "file", accept: "application/json", style: { display: "none" } });
+  fileInput.addEventListener("change", function() {
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (!file) return;
+    importAllData(file, function(success, errorMsg) {
+      if (success) {
+        settingsFlash = { color: "secondary", text: "Backup imported. Your data has been restored." };
+        state.theme = readLS("settings:theme", "anchorpoint");
+        cravingSession = null;
+      } else if (errorMsg) {
+        settingsFlash = { color: "accent", text: errorMsg };
+      } else {
+        return; // user cancelled the confirm — nothing changed
+      }
+      render();
+      var thisFlash = settingsFlash;
+      setTimeout(function() {
+        if (settingsFlash === thisFlash) { settingsFlash = null; if (state.tab === "settings") render(); }
+      }, 4000);
+    });
+  });
+  var dataCard = card(t, [
+    el("div", { style: { fontSize: "13px", color: t.text, marginBottom: "12px" } },
+      ["Everything you write — gratitude, journal entries, sobriety dates, urge logs — lives only in this browser. Export a backup regularly, especially before switching devices or clearing your browser data."]),
+    el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap" } }, [
+      primaryButton(t, "⬇️ Export backup", exportAllData),
+      el("button", {
+        onclick: function() { fileInput.click(); },
+        style: { background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "12px", padding: "12px 18px", fontWeight: "700", fontSize: "14px", cursor: "pointer" }
+      }, ["⬆️ Import backup"])
+    ]),
+    fileInput,
+    importStatus
+  ]);
+  wrap.appendChild(el("div", { style: { marginTop: "24px" } }, [sectionLabel(t, "Your data"), dataCard]));
 
   var feedbackCard = card(t, [
     el("div", { style: { fontSize: "13px", color: t.text, marginBottom: "10px" } }, ["This app is in beta. Found a bug or have an idea? We'd love to hear it."]),
