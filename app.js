@@ -1326,9 +1326,20 @@ function exportAllData() {
   document.body.removeChild(a);
   setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 }
-// Persists an import/export status message across the render() the
-// settings tab triggers right after a successful/failed import (see below).
+// Persists a status message across the render() the settings tab triggers
+// right after an action (import, reminder permission issues, etc.) — a
+// message set on the current DOM node would be destroyed by that render()
+// before it was ever seen, so it lives here instead and gets read back out
+// by renderSettingsTab.
 var settingsFlash = null;
+function showSettingsFlash(color, text) {
+  settingsFlash = { color: color, text: text };
+  render();
+  var thisFlash = settingsFlash;
+  setTimeout(function() {
+    if (settingsFlash === thisFlash) { settingsFlash = null; if (state.tab === "settings") render(); }
+  }, 4000);
+}
 
 function importAllData(file, onDone) {
   var reader = new FileReader();
@@ -1362,6 +1373,139 @@ function importAllData(file, onDone) {
 }
 
 /* ===========================================================
+   DAILY REMINDERS
+   No server means no push notifications — this uses the plain
+   Notification API, checked on a timer while the app is open (including
+   backgrounded browser tabs). It won't fire once the browser is fully
+   closed; that's an honest limitation of a static, backend-free app, not
+   something worth overpromising in the UI copy below.
+=========================================================== */
+var REMINDERS_KEY = "settings:reminders";
+function defaultReminders() {
+  return {
+    morning: { enabled: false, time: "08:00", lastFired: "" },
+    evening: { enabled: false, time: "20:00", lastFired: "" }
+  };
+}
+function notificationsSupported() { return "Notification" in window; }
+
+function checkReminders() {
+  if (!notificationsSupported() || Notification.permission !== "granted") return;
+  var reminders = readLS(REMINDERS_KEY, null);
+  if (!reminders) return;
+  var now = new Date();
+  var todayKey = dateKey(now);
+  var hhmm = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+  var changed = false;
+
+  function maybeFire(cfg, title, body, alreadyDone) {
+    if (!cfg || !cfg.enabled || !cfg.time) return;
+    if (cfg.lastFired === todayKey) return;
+    if (hhmm < cfg.time) return;
+    if (!alreadyDone()) {
+      try {
+        var n = new Notification(title, { body: body, icon: "icon-192.png", tag: "anchorpoint-" + title });
+        n.onclick = function() { window.focus(); n.close(); };
+      } catch (e) {}
+    }
+    cfg.lastFired = todayKey;
+    changed = true;
+  }
+
+  maybeFire(reminders.morning, "Morning gratitude ☀️", "Take a minute for today's gratitude in Anchorpoint.", function() {
+    return readLS("stats:gratitudeDates", []).indexOf(todayKey) !== -1;
+  });
+  maybeFire(reminders.evening, "Evening reflection 🌙", "How was today? Your journal is ready when you are.", function() {
+    return readLS("stats:journalDates", []).indexOf(todayKey) !== -1;
+  });
+
+  if (changed) writeLS(REMINDERS_KEY, reminders);
+}
+
+function toggleSwitch(t, on, onClick) {
+  return el("button", {
+    type: "button",
+    onclick: onClick,
+    style: {
+      width: "44px", height: "26px", borderRadius: "999px", border: "none", cursor: "pointer",
+      background: on ? t.primary : t.border, position: "relative", flexShrink: "0", padding: "0"
+    }
+  }, [
+    el("span", { style: { position: "absolute", top: "3px", left: on ? "21px" : "3px", width: "20px", height: "20px", borderRadius: "50%", background: "#fff", transition: "left 0.15s" } })
+  ]);
+}
+
+function reminderRow(t, reminders, key, icon, label, description) {
+  var cfg = reminders[key];
+
+  var timeInput = el("input", {
+    type: "time",
+    style: {
+      background: t.bgSoft, color: t.text, border: "1px solid " + t.border, borderRadius: "10px",
+      padding: "8px 10px", fontSize: "14px", opacity: cfg.enabled ? "1" : "0.5"
+    }
+  });
+  timeInput.value = cfg.time;
+  timeInput.disabled = !cfg.enabled;
+  timeInput.addEventListener("change", function() {
+    cfg.time = timeInput.value || cfg.time;
+    cfg.lastFired = ""; // a new time today should still fire today if it's due
+    writeLS(REMINDERS_KEY, reminders);
+  });
+
+  var switchBtn = toggleSwitch(t, cfg.enabled, function() {
+    if (cfg.enabled) {
+      cfg.enabled = false;
+      writeLS(REMINDERS_KEY, reminders);
+      render();
+      return;
+    }
+    if (!notificationsSupported()) {
+      showSettingsFlash("accent", "Notifications aren't supported in this browser.");
+      return;
+    }
+    if (Notification.permission === "denied") {
+      showSettingsFlash("accent", "Notifications are blocked for this site — enable them in your browser settings first.");
+      return;
+    }
+    if (Notification.permission === "granted") {
+      cfg.enabled = true;
+      cfg.lastFired = "";
+      writeLS(REMINDERS_KEY, reminders);
+      render();
+      return;
+    }
+    Notification.requestPermission().then(function(perm) {
+      if (perm === "granted") {
+        cfg.enabled = true;
+        cfg.lastFired = "";
+        writeLS(REMINDERS_KEY, reminders);
+        render();
+      } else {
+        showSettingsFlash("accent", "Notification permission wasn't granted, so this reminder is off.");
+      }
+    });
+  });
+
+  return card(t, [
+    el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" } }, [
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px" } }, [
+        el("span", { style: { fontSize: "20px" } }, [icon]),
+        el("div", {}, [
+          el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "14px", color: t.text } }, [label]),
+          el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "2px" } }, [description])
+        ])
+      ]),
+      switchBtn
+    ]),
+    el("div", { style: { marginTop: "12px", display: "flex", alignItems: "center", gap: "10px" } }, [
+      el("span", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700" } }, ["Remind me at"]),
+      timeInput
+    ])
+  ], { marginBottom: "12px" });
+}
+
+/* ===========================================================
    SETTINGS TAB
 =========================================================== */
 function renderSettingsTab(t) {
@@ -1390,6 +1534,16 @@ function renderSettingsTab(t) {
   themeSection.appendChild(grid);
   wrap.appendChild(themeSection);
 
+  var reminders = readLS(REMINDERS_KEY, defaultReminders());
+  var remindersSection = el("div", { style: { marginTop: "24px" } }, [
+    sectionLabel(t, "Daily reminders"),
+    el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "12px" } },
+      ["Reminders fire while Anchorpoint is open in a browser tab, including in the background. There's no server here, so a plain web app can't schedule a notification for after the browser is fully closed — keeping a tab open (or checking in around these times) is the most reliable way to get them for now."]),
+    reminderRow(t, reminders, "morning", "☀️", "Morning gratitude", "A nudge to write today's gratitude, skipped if you've already saved one."),
+    reminderRow(t, reminders, "evening", "🌙", "Evening reflection", "A nudge to journal, skipped if you've already saved an entry today.")
+  ]);
+  wrap.appendChild(remindersSection);
+
   // render() below rebuilds the whole tab (fresh DOM, including a new
   // importStatus node), so a message set on the *current* node and
   // followed by render() would be destroyed before ever being seen. Keep
@@ -1405,19 +1559,13 @@ function renderSettingsTab(t) {
     if (!file) return;
     importAllData(file, function(success, errorMsg) {
       if (success) {
-        settingsFlash = { color: "secondary", text: "Backup imported. Your data has been restored." };
         state.theme = readLS("settings:theme", "anchorpoint");
         cravingSession = null;
+        showSettingsFlash("secondary", "Backup imported. Your data has been restored.");
       } else if (errorMsg) {
-        settingsFlash = { color: "accent", text: errorMsg };
-      } else {
-        return; // user cancelled the confirm — nothing changed
+        showSettingsFlash("accent", errorMsg);
       }
-      render();
-      var thisFlash = settingsFlash;
-      setTimeout(function() {
-        if (settingsFlash === thisFlash) { settingsFlash = null; if (state.tab === "settings") render(); }
-      }, 4000);
+      // else: user cancelled the confirm — nothing changed, no flash
     });
   });
   var dataCard = card(t, [
@@ -1454,6 +1602,8 @@ function renderSettingsTab(t) {
    BOOT
 =========================================================== */
 render();
+checkReminders();
+setInterval(checkReminders, 60 * 1000);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
