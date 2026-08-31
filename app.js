@@ -329,6 +329,7 @@ function renderGratitudeTab(t) {
     primaryButton(t, "Save today's gratitude", function() {
       var next = inputs.map(function(i) { return i.value; });
       writeLS(key, next);
+      if (next.some(function(v) { return v.trim(); })) recordStatDate("stats:gratitudeDates", dateKey(today));
       flashSpan.style.display = "inline";
       setTimeout(function() { flashSpan.style.display = "none"; }, 1800);
     }),
@@ -374,14 +375,96 @@ function durationSince(dateStr) {
   return { years: years, months: months, days: days, totalDays: totalDays };
 }
 var MILESTONES = [
-  { label: "1 Day", days: 1 },
-  { label: "7 Days", days: 7 },
-  { label: "30 Days", days: 30 },
-  { label: "60 Days", days: 60 },
-  { label: "90 Days", days: 90 },
-  { label: "180 Days", days: 180 },
-  { label: "1 Year", days: 365 }
+  { label: "1 Day", value: 1 },
+  { label: "7 Days", value: 7 },
+  { label: "30 Days", value: 30 },
+  { label: "60 Days", value: 60 },
+  { label: "90 Days", value: 90 },
+  { label: "180 Days", value: 180 },
+  { label: "1 Year", value: 365 }
 ];
+// Shared by the per-substance day badges above and the cross-feature
+// achievements below — both are "earn a badge at each threshold, show how
+// far to the next one" with the same visuals, just different units.
+function milestoneBadgeRow(t, milestones, currentValue) {
+  var row = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
+  var nextMilestone = null;
+  milestones.forEach(function(m) {
+    var earned = currentValue >= m.value;
+    if (!earned && nextMilestone === null) nextMilestone = m;
+    row.appendChild(el("div", {
+      style: {
+        display: "flex", alignItems: "center", gap: "6px",
+        background: earned ? t.primary : t.bgSoft,
+        border: "1px solid " + (earned ? t.primary : t.border),
+        color: earned ? t.primaryText : t.textMuted,
+        borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "800",
+        opacity: earned ? "1" : "0.65"
+      }
+    }, [earned ? "🏆 " + m.label : m.label]));
+  });
+  return { row: row, next: nextMilestone };
+}
+
+/* ===========================================================
+   ACHIEVEMENTS — recovery milestones beyond streak days.
+   Gratitude entries get pruned after 30 days (see the duplicate-check
+   logic in the gratitude tab) and craving/trigger logs could in
+   principle be cleared, so a lifetime count can't be derived from
+   what's currently in localStorage. recordStatDate keeps a small,
+   never-pruned list of dates-ever-saved just for this tally.
+=========================================================== */
+function recordStatDate(statKey, dateStr) {
+  var dates = readLS(statKey, []);
+  if (dates.indexOf(dateStr) === -1) {
+    dates.push(dateStr);
+    writeLS(statKey, dates);
+  }
+}
+var ACHIEVEMENTS = [
+  { label: "Grateful Days", icon: "☀️", unit: "days", tiers: [7, 30, 100],
+    count: function() { return readLS("stats:gratitudeDates", []).length; } },
+  { label: "Journal Entries", icon: "🌙", unit: "entries", tiers: [7, 30, 100],
+    count: function() { return readLS("stats:journalDates", []).length; } },
+  { label: "Urges Ridden Out", icon: "🌊", unit: "sessions", tiers: [5, 20, 50],
+    count: function() { return readLS(CRAVING_LOG_KEY, []).length; } },
+  { label: "Urges Passed", icon: "💪", unit: "wins", tiers: [5, 20, 50],
+    count: function() { return readLS(CRAVING_LOG_KEY, []).filter(function(e) { return e.outcome === "passed"; }).length; } },
+  { label: "Self-Awareness Logs", icon: "🚩", unit: "logs", tiers: [5, 20, 50],
+    count: function() { return readLS(TRIGGER_LOG_KEY, []).length; } }
+];
+function renderAchievements(t) {
+  var wrap = el("div", { style: { marginTop: "24px" } });
+  wrap.appendChild(sectionLabel(t, "Milestones beyond the streak"));
+  wrap.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginBottom: "14px" } },
+    ["Recovery shows up in more than days sober — these track the habits that support it."]));
+
+  ACHIEVEMENTS.forEach(function(a) {
+    var count = a.count();
+    var tierMilestones = a.tiers.map(function(v) { return { label: v + " " + a.unit, value: v }; });
+    var result = milestoneBadgeRow(t, tierMilestones, count);
+    var body = [
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" } }, [
+        el("span", { style: { fontSize: "20px" } }, [a.icon]),
+        el("div", {}, [
+          el("div", { style: { fontFamily: t.display, fontWeight: "900", fontSize: "20px", color: t.text } }, [String(count)]),
+          el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase" } }, [a.label])
+        ])
+      ]),
+      result.row
+    ];
+    if (result.next) {
+      var toGo = result.next.value - count;
+      body.push(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
+        [toGo + " more to reach " + result.next.value + "."]));
+    } else {
+      body.push(el("div", { style: { fontSize: "12px", color: t.secondary, fontWeight: "700", marginTop: "8px" } }, ["All tiers earned here — nice work."]));
+    }
+    wrap.appendChild(card(t, body, { marginBottom: "12px" }));
+  });
+
+  return wrap;
+}
 function renderSobrietyTab(t) {
   var data = readLS("sobriety:tracker", [
     { name: "Substance 1", since: "" }, { name: "Substance 2", since: "" }, { name: "Substance 3", since: "" },
@@ -434,27 +517,12 @@ function renderSobrietyTab(t) {
 
         var badgeLabel = el("div", { style: { fontSize: "11px", color: t.textMuted, fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.5px", marginTop: "16px", marginBottom: "8px" } }, ["Milestone Awards"]);
         badgesHolder.appendChild(badgeLabel);
-        var badgeRow = el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } });
-        var nextMilestone = null;
-        MILESTONES.forEach(function(m) {
-          var earned = dur.totalDays >= m.days;
-          if (!earned && nextMilestone === null) nextMilestone = m;
-          badgeRow.appendChild(el("div", {
-            style: {
-              display: "flex", alignItems: "center", gap: "6px",
-              background: earned ? t.primary : t.bgSoft,
-              border: "1px solid " + (earned ? t.primary : t.border),
-              color: earned ? t.primaryText : t.textMuted,
-              borderRadius: "999px", padding: "7px 12px", fontSize: "12px", fontWeight: "800",
-              opacity: earned ? "1" : "0.65"
-            }
-          }, [earned ? "\uD83C\uDFC6 " + m.label : m.label]));
-        });
-        badgesHolder.appendChild(badgeRow);
-        if (nextMilestone) {
-          var daysToGo = nextMilestone.days - dur.totalDays;
+        var milestoneResult = milestoneBadgeRow(t, MILESTONES, dur.totalDays);
+        badgesHolder.appendChild(milestoneResult.row);
+        if (milestoneResult.next) {
+          var daysToGo = milestoneResult.next.value - dur.totalDays;
           badgesHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.textMuted, marginTop: "8px" } },
-            [daysToGo + " day" + (daysToGo === 1 ? "" : "s") + " to go until " + nextMilestone.label + "."]));
+            [daysToGo + " day" + (daysToGo === 1 ? "" : "s") + " to go until " + milestoneResult.next.label + "."]));
         } else {
           badgesHolder.appendChild(el("div", { style: { fontSize: "12px", color: t.secondary, fontWeight: "700", marginTop: "8px" } }, ["All milestones earned \u2014 incredible work."]));
         }
@@ -477,6 +545,8 @@ function renderSobrietyTab(t) {
       badgesHolder
     ], { marginBottom: "14px" }));
   });
+
+  wrap.appendChild(renderAchievements(t));
 
   return wrap;
 }
@@ -949,6 +1019,7 @@ function renderJournalTab(t) {
     primaryButton(t, "Save entry", function() {
       entry.text = textarea.value;
       writeLS(key, entry);
+      if (entry.text.trim()) recordStatDate("stats:journalDates", dateKey(today));
       flashSpan.style.display = "inline";
       setTimeout(function() { flashSpan.style.display = "none"; }, 1800);
     }),
