@@ -1,0 +1,28 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No build step / package.json in this repo, so a syntax check plus a
+      # pinned, config-driven ESLint run (via npx, no install step) is
+      # enough to catch typos and undefined-variable bugs before merge.
+      - name: Check JS syntax
+        run: |
+          for f in app.js data.js service-worker.js; do
+            node --check "$f"
+          done
+
+      - name: ESLint
+        run: npx --yes eslint@8.57.1 app.js data.js service-worker.js

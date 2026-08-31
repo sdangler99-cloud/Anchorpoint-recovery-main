@@ -1160,7 +1160,6 @@ function renderJournalTab(t) {
    RESOURCES TAB
 =========================================================== */
 function renderResourcesTab(t) {
-  var zip = "";
   var wrap = el("div");
   wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
     el("span", { style: { fontSize: "22px" } }, ["\uD83D\uDCCD"]),
