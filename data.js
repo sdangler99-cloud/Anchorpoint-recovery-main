@@ -320,6 +320,55 @@ var QUOTES = [
   ["You are someone's reason to keep going.", "Recovery community saying"]
 ];
 
+var CONTROL_ITEMS = [
+  "How I respond to challenges.","Who I ask for help.","When I ask for help.",
+  "Saying I need a break.","How I act.","How much effort I put forth.",
+  "Getting enough sleep.","Completing my responsibilities.","Using I-statements.",
+  "Saying what I need.","How much exercise I do.","Setting my boundaries.",
+  "Respecting other people's boundaries.","When and if I forgive others.","How often I smile.",
+  "Owning up to my mistakes.","When I show empathy.","Whether or not I accept myself.",
+  "What I focus on in this very moment.","Focusing on the negatives or positives.",
+  "What goals I create for myself.","The kind of attitude I have.","How I relate to my feelings.",
+  "Whether I help someone out or not.","How I take care of and treat my body.",
+  "Treating others the way I want to be treated.","When I listen to others.",
+  "How truthful and honest I am.","When I talk about my feelings.","Expressing what I hope for.",
+  "How I interpret events.","When I ignore behavior that annoys me.","Apologizing when I make a mistake.",
+  "How I \"talk\" to myself.","If and when I try again.","Treating others with kindness.",
+  "Treating myself with kindness.","Saying please and thank you.","Going outside and enjoying the fresh air.",
+  "How organized or clean I am.","How I hold my body (like my posture).","Reminding myself that I am lovable.",
+  "How I show others that I care about them.","Whether I \"get back up\" after I \"fall down.\"",
+  "When I practice gratitude.","Whether or not I keep my word.","What coping strategies I use.",
+  "Whether or not I accept the situation.","Using mistakes as opportunities for learning.",
+  "When I take mindful breaths."
+];
+var CONTROL_CATEGORY_BREAKS = {
+  0: "How I Show Up",
+  10: "Boundaries & Self-Acceptance",
+  20: "Mindset & Relationships",
+  30: "Self-Talk & Kindness",
+  40: "Resilience & Gratitude"
+};
+// Low numbers on the scale = "Can control" (lots of agency) → congratulate.
+// High numbers = "Can't control" (mostly out of their hands) → comfort/uplift.
+var CONTROL_QUOTES_AGENCY = [
+  "That's real strength — naming what's yours to hold.",
+  "Nice. Claiming your control here is not nothing.",
+  "You're steering this one. That matters.",
+  "Good — that clarity is worth holding onto.",
+  "You know your part in this. That's the work.",
+  "That's exactly the kind of clarity that moves things forward.",
+  "Recognizing what's yours to carry is half the battle. Well done."
+];
+var CONTROL_QUOTES_UPLIFT = [
+  "It's okay that this one feels out of your hands. You don't have to hold what isn't yours.",
+  "Some things really aren't yours to carry. Let this one rest a little.",
+  "You don't have to fix what you can't control — just breathe through it.",
+  "This won't feel this heavy forever. You're allowed to set it down for now.",
+  "Not everything is yours to solve today. That's not failure — that's true.",
+  "It's okay to feel small next to this. You're still doing your part.",
+  "Letting go of what isn't yours isn't giving up — it's wisdom."
+];
+
 var RESOURCE_CATEGORIES = [
   { key: "crisis", label: "Crisis Support", desc: "988 Suicide & Crisis Lifeline, Crisis Text Line", url: function(z) { return "https://988lifeline.org"; }, always: true },
   { key: "aa_inperson", label: "AA Meetings \u2014 In Person", desc: "Find nearby Alcoholics Anonymous meetings on the map", url: function(z) { return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("AA meetings near " + z); } },
