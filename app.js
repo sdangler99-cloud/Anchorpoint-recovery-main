@@ -106,6 +106,7 @@ function render() {
     sobriety: renderSobrietyTab,
     craving: renderCravingTab,
     journal: renderJournalTab,
+    control: renderControlTab,
     resources: renderResourcesTab,
     settings: renderSettingsTab
   };
@@ -175,6 +176,7 @@ var TABS = [
   { key: "sobriety", label: "Sobriety", icon: "\uD83D\uDD25" },
   { key: "craving", label: "Urge", icon: "\uD83C\uDF0A" },
   { key: "journal", label: "Evening", icon: "\uD83C\uDF19" },
+  { key: "control", label: "Control", icon: "\uD83E\uDDED" },
   { key: "resources", label: "Resources", icon: "\uD83D\uDCCD" },
   { key: "settings", label: "Settings", icon: "\u2699\uFE0F" }
 ];
@@ -1066,6 +1068,126 @@ function renderCravingTab(t) {
   } else {
     wrap.appendChild(renderCravingCheckin(t));
   }
+
+  return wrap;
+}
+
+/* ===========================================================
+   CONTROL TAB
+   Ported from Groundwork's "Skills" view: a checklist of things
+   within your control, and a "Right now" circle-of-control scale
+   that surfaces an encouraging quote based on where you tap.
+=========================================================== */
+function renderControlTab(t) {
+  var wrap = el("div");
+  wrap.appendChild(el("div", { style: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" } }, [
+    el("span", { style: { fontSize: "22px" } }, ["🧭"]),
+    el("h2", { style: { fontFamily: t.display, fontSize: "22px", margin: "0", color: t.text } }, ["What I Can Control"])
+  ]));
+  wrap.appendChild(el("p", { style: { color: t.textMuted, fontSize: "14px", marginTop: "4px", marginBottom: "18px" } },
+    ["Somewhere to put your focus when everything else feels like too much."]));
+
+  /* ---- 50 things I can control ---- */
+  var controlChecked = readLS("control:checklist", {});
+  var controlProgressLabel = el("div", { style: { fontSize: "12px", color: t.textMuted, fontWeight: "700", marginBottom: "10px" } });
+  var controlProgressTrack = el("div", { style: { height: "6px", borderRadius: "999px", background: t.bgSoft, overflow: "hidden", marginBottom: "14px" } });
+  var controlProgressFill = el("div", { style: { height: "100%", borderRadius: "999px", background: t.secondary, width: "0%", transition: "width 0.3s ease" } });
+  controlProgressTrack.appendChild(controlProgressFill);
+  function updateControlProgress() {
+    var done = CONTROL_ITEMS.reduce(function(n, item, i) { return n + (controlChecked[i] ? 1 : 0); }, 0);
+    controlProgressLabel.textContent = done + " of " + CONTROL_ITEMS.length + " checked";
+    controlProgressFill.style.width = Math.round((done / CONTROL_ITEMS.length) * 100) + "%";
+  }
+  updateControlProgress();
+
+  var controlList = el("div");
+  CONTROL_ITEMS.forEach(function(text, i) {
+    if (CONTROL_CATEGORY_BREAKS[i]) {
+      controlList.appendChild(el("div", {
+        style: { fontFamily: t.display, fontWeight: "800", fontSize: "12px", letterSpacing: "0.8px", textTransform: "uppercase", color: t.textMuted, margin: i === 0 ? "0 2px 10px" : "18px 2px 10px" }
+      }, [CONTROL_CATEGORY_BREAKS[i]]));
+    }
+    var cb = el("input", { type: "checkbox" });
+    cb.checked = !!controlChecked[i];
+    cb.style.marginRight = "10px";
+    cb.style.width = "16px";
+    cb.style.height = "16px";
+    cb.style.flexShrink = "0";
+    cb.addEventListener("change", function() {
+      controlChecked[i] = cb.checked;
+      writeLS("control:checklist", controlChecked);
+      updateControlProgress();
+    });
+    controlList.appendChild(el("label", {
+      style: { display: "flex", alignItems: "center", padding: "6px 4px", cursor: "pointer" }
+    }, [cb, el("span", { style: { fontSize: "14px", color: t.text } }, [text])]));
+  });
+
+  var controlResetBtn = el("button", {
+    type: "button",
+    onclick: function() {
+      controlChecked = {};
+      writeLS("control:checklist", controlChecked);
+      controlList.querySelectorAll("input[type=checkbox]").forEach(function(cb) { cb.checked = false; });
+      updateControlProgress();
+    },
+    style: { border: "1px solid " + t.border, background: t.cardAlt, color: t.text, borderRadius: "10px", padding: "8px 14px", fontWeight: "700", fontSize: "12.5px", cursor: "pointer" }
+  }, ["Reset"]);
+
+  wrap.appendChild(card(t, [
+    sectionLabel(t, "50 things I can control"),
+    el("p", { style: { fontSize: "13px", color: t.textMuted, marginTop: "-4px", marginBottom: "4px" } }, ["What to focus on right now, when everything else feels like too much."]),
+    controlProgressLabel, controlProgressTrack,
+    controlList,
+    el("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "12px" } }, [controlResetBtn])
+  ], { marginBottom: "14px" }));
+
+  /* ---- right now: circle-of-control scale, with a quote on tap ---- */
+  var controlScale = readLS("control:scale", null);
+  var scaleQuote = el("div", {
+    style: {
+      display: controlScale ? "block" : "none", fontFamily: t.display, fontStyle: "italic", fontWeight: "700",
+      fontSize: "14px", lineHeight: "1.4", color: t.text, background: t.bgSoft, borderRadius: "12px",
+      padding: "12px 14px", marginTop: "12px"
+    }
+  }, [controlScale ? (controlScale <= 5 ? CONTROL_QUOTES_AGENCY[0] : CONTROL_QUOTES_UPLIFT[0]) : ""]);
+  var scaleGrid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "8px", marginTop: "6px" } });
+  for (var scaleN = 1; scaleN <= 10; scaleN++) {
+    (function(n) {
+      var btn = el("button", {
+        type: "button",
+        style: {
+          padding: "12px 0", borderRadius: "10px", border: "1px solid " + (controlScale === n ? t.primary : t.border),
+          background: controlScale === n ? t.primary : t.bgSoft, color: controlScale === n ? t.primaryText : t.text,
+          fontWeight: "800", fontSize: "14px", cursor: "pointer"
+        }
+      }, [String(n)]);
+      btn.addEventListener("click", function() {
+        controlScale = n;
+        writeLS("control:scale", controlScale);
+        Array.prototype.forEach.call(scaleGrid.children, function(b) {
+          b.style.background = t.bgSoft; b.style.color = t.text; b.style.borderColor = t.border;
+        });
+        btn.style.background = t.primary; btn.style.color = t.primaryText; btn.style.borderColor = t.primary;
+
+        var pool = n <= 5 ? CONTROL_QUOTES_AGENCY : CONTROL_QUOTES_UPLIFT;
+        scaleQuote.textContent = pool[Math.floor(Math.random() * pool.length)];
+        scaleQuote.style.display = "block";
+      });
+      scaleGrid.appendChild(btn);
+    })(scaleN);
+  }
+
+  wrap.appendChild(card(t, [
+    sectionLabel(t, "Right now"),
+    el("div", { style: { fontFamily: t.display, fontWeight: "800", fontSize: "15px", color: t.text, marginBottom: "2px" } }, ["How much control do I have?"]),
+    el("p", { style: { fontSize: "13px", color: t.textMuted, marginBottom: "4px" } }, ["Tap the number that fits this situation."]),
+    scaleGrid,
+    el("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "11px", color: t.textMuted, fontWeight: "700", marginTop: "6px" } }, [
+      el("span", {}, ["Can control"]), el("span", {}, ["Can't control"])
+    ]),
+    scaleQuote
+  ]));
 
   return wrap;
 }
