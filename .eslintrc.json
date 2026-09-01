@@ -21,6 +21,10 @@
         "TOPIC_DECK": "readonly",
         "QUOTES": "readonly",
         "RESOURCE_CATEGORIES": "readonly",
+        "CONTROL_ITEMS": "readonly",
+        "CONTROL_CATEGORY_BREAKS": "readonly",
+        "CONTROL_QUOTES_AGENCY": "readonly",
+        "CONTROL_QUOTES_UPLIFT": "readonly",
         "dateKey": "readonly",
         "dayOfYear": "readonly"
       }
